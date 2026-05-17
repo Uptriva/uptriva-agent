@@ -49,10 +49,11 @@ func readRAMUsage() (float64, error) {
 		if len(fields) < 2 {
 			continue
 		}
-		if fields[0] == "MemTotal:" {
+		switch fields[0] {
+		case "MemTotal:":
 			val, _ := strconv.ParseFloat(fields[1], 64)
 			total = val
-		} else if fields[0] == "MemAvailable:" {
+		case "MemAvailable:":
 			val, _ := strconv.ParseFloat(fields[1], 64)
 			available = val
 		}
