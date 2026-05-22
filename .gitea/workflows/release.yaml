@@ -31,3 +31,4 @@ jobs:
         with:
           name: uptime-agents-multiplatform
           path: dist/
+
