@@ -29,50 +29,18 @@ type MetricsPayload struct {
 	Processes string  `json:"processes"`
 }
 
-func collectMetrics(prevTotal, prevIdle *uint64) (MetricsPayload, error) {
+func collectMetrics() (MetricsPayload, error) {
 	var payload MetricsPayload
 
-	total, idle, err := readProcStat()
-	if err == nil {
-		if *prevTotal > 0 {
-			diffTotal := total - *prevTotal
-			diffIdle := idle - *prevIdle
-			if diffTotal > 0 {
-				payload.CPUUsage = float64(diffTotal-diffIdle) / float64(diffTotal) * 100
-			}
-		}
-		*prevTotal = total
-		*prevIdle = idle
-	} else {
-		payload.CPUUsage = 0.0
-	}
-
-	ram, err := readRAMUsage()
-	if err == nil {
-		payload.RAMUsage = ram
-	} else {
-		payload.RAMUsage = 0.0
-	}
-
-	disk, err := readDiskUsage()
-	if err == nil {
-		payload.DiskUsage = disk
-	} else {
-		payload.DiskUsage = 0.0
-	}
-
-	netIn, netOut, err := readNetworkBytes()
-	if err == nil {
-		payload.NetIn = netIn
-		payload.NetOut = netOut
-	}
-
-	procs, err := readRunningProcesses()
-	if err == nil {
-		payload.Processes = procs
-	} else {
-		payload.Processes = "[]"
-	}
+	payload.CPUUsage = getCPUUsage()
+	payload.RAMUsage = getRAMUsage()
+	payload.DiskUsage = getDiskUsage()
+	
+	netIn, netOut := getNetworkBytes()
+	payload.NetIn = netIn
+	payload.NetOut = netOut
+	
+	payload.Processes = getRunningProcesses()
 
 	return payload, nil
 }
@@ -164,9 +132,8 @@ func main() {
 
 	if config.Port > 0 {
 		go func() {
-			var prevTotal, prevIdle uint64
 			http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-				payload, err := collectMetrics(&prevTotal, &prevIdle)
+				payload, err := collectMetrics()
 				if err != nil {
 					http.Error(w, err.Error(), 500)
 					return
@@ -178,10 +145,9 @@ func main() {
 		}()
 	}
 
-	var prevTotal, prevIdle uint64
 	ticker := time.NewTicker(time.Duration(config.Interval) * time.Second)
 	for range ticker.C {
-		payload, err := collectMetrics(&prevTotal, &prevIdle)
+		payload, err := collectMetrics()
 		if err != nil {
 			continue
 		}
