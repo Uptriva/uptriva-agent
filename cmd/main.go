@@ -32,7 +32,8 @@ type Config struct {
 func getEncryptionKey() string {
 	key := os.Getenv("AGENT_ENCRYPTION_KEY")
 	if key == "" {
-		key = "shxrksystems-agent-key-32bytes!"
+		fmt.Println("FATAL: AGENT_ENCRYPTION_KEY environment variable is required")
+		os.Exit(1)
 	}
 	if len(key) < 32 {
 		key = key + strings.Repeat("0", 32-len(key))
