@@ -18,17 +18,20 @@ jobs:
 
       - name: Build Static Agents for Multi-Platforms
         run: |
-          mkdir -p dist
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/uptime-agent-linux-amd64 cmd/main.go cmd/metrics.go
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/uptime-agent-linux-arm64 cmd/main.go cmd/metrics.go
-          CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -ldflags="-s -w" -o dist/uptime-agent-freebsd-amd64 cmd/main.go cmd/metrics.go
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/uptime-agent-windows-amd64.exe cmd/main.go cmd/metrics.go
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/uptime-agent-darwin-amd64 cmd/main.go cmd/metrics.go
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/uptime-agent-darwin-arm64 cmd/main.go cmd/metrics.go
+          mkdir -p dist/linux/amd64 dist/linux/arm64 dist/windows/amd64 dist/darwin/amd64 dist/darwin/arm64
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/linux/amd64/uptime-agent cmd/main.go cmd/metrics.go
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/linux/arm64/uptime-agent cmd/main.go cmd/metrics.go
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/windows/amd64/uptime-agent.exe cmd/main.go cmd/metrics.go
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/darwin/amd64/uptime-agent cmd/main.go cmd/metrics.go
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/darwin/arm64/uptime-agent cmd/main.go cmd/metrics.go
 
-      - name: Upload Multi-Platform Agent Artifacts
-        uses: actions/upload-artifact@v3
-        with:
-          name: uptime-agents-multiplatform
-          path: dist/
-
+      - name: Compress and Upload to Download Server
+        env:
+          DOWNLOAD_API_KEY: ${{ secrets.DOWNLOAD_API_KEY }}
+        run: |
+          cd dist
+          tar -czf release.tar.gz .
+          curl -X POST https://download.shxrk.systems/upload \
+            -H "Authorization: Bearer $DOWNLOAD_API_KEY" \
+            -F "file=@release.tar.gz" \
+            --fail --show-error --silent
