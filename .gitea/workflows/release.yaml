@@ -30,7 +30,8 @@ jobs:
           DOWNLOAD_API_KEY: ${{ secrets.DOWNLOAD_API_KEY }}
         run: |
           cd dist
-          tar -czf release.tar.gz .
+          tar -czf ../release.tar.gz .
+          cd ..
           curl -X POST https://download.shxrk.systems/upload \
             -H "Authorization: Bearer $DOWNLOAD_API_KEY" \
             -F "file=@release.tar.gz" \
