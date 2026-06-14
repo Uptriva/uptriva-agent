@@ -21,12 +21,12 @@ import (
 )
 
 type Config struct {
-	APIURL   string `json:"api_url"`
-	APIKey   string `json:"api_key"`
-	AgentID  string `json:"agent_id"`
-	OrgID    string `json:"org_id"`
-	Interval int    `json:"interval"`
-	Port     int    `json:"port"`
+	APIURL		string	`json:"api_url"`
+	APIKey		string	`json:"api_key"`
+	AgentID		string	`json:"agent_id"`
+	OrgID		string	`json:"org_id"`
+	Interval	int	`json:"interval"`
+	Port		int	`json:"port"`
 }
 
 func getEncryptionKey() string {
@@ -122,12 +122,12 @@ func ensureHTTPS(url string) string {
 }
 
 type MetricsPayload struct {
-	CPUUsage  float64 `json:"cpu_usage"`
-	RAMUsage  float64 `json:"ram_usage"`
-	DiskUsage float64 `json:"disk_usage"`
-	NetIn     int64   `json:"net_in"`
-	NetOut    int64   `json:"net_out"`
-	Processes string  `json:"processes"`
+	CPUUsage	float64	`json:"cpu_usage"`
+	RAMUsage	float64	`json:"ram_usage"`
+	DiskUsage	float64	`json:"disk_usage"`
+	NetIn		int64	`json:"net_in"`
+	NetOut		int64	`json:"net_out"`
+	Processes	string	`json:"processes"`
 }
 
 func collectMetrics() (MetricsPayload, error) {
@@ -158,9 +158,9 @@ func performHandshake(apiURL, token string) (Config, error) {
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
 
 	payload := map[string]string{
-		"token":         token,
-		"hostname_hash": hostnameHash,
-		"timestamp":     timestamp,
+		"token":		token,
+		"hostname_hash":	hostnameHash,
+		"timestamp":		timestamp,
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -170,7 +170,7 @@ func performHandshake(apiURL, token string) (Config, error) {
 	signature := signPayload(b, token)
 
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout:	10 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
 				MinVersion: tls.VersionTLS12,
@@ -198,20 +198,20 @@ func performHandshake(apiURL, token string) (Config, error) {
 	}
 
 	var res struct {
-		APIKey  string `json:"api_key"`
-		AgentID string `json:"agent_id"`
-		OrgID   string `json:"org_id"`
+		APIKey	string	`json:"api_key"`
+		AgentID	string	`json:"agent_id"`
+		OrgID	string	`json:"org_id"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return Config{}, err
 	}
 
 	return Config{
-		APIURL:   apiURL,
-		APIKey:   res.APIKey,
-		AgentID:  res.AgentID,
-		OrgID:    res.OrgID,
-		Interval: 10,
+		APIURL:		apiURL,
+		APIKey:		res.APIKey,
+		AgentID:	res.AgentID,
+		OrgID:		res.OrgID,
+		Interval:	10,
 	}, nil
 }
 
@@ -309,7 +309,7 @@ func main() {
 		req.Header.Set("X-Agent-Timestamp", timestamp)
 
 		client := &http.Client{
-			Timeout: 5 * time.Second,
+			Timeout:	5 * time.Second,
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{
 					MinVersion: tls.VersionTLS12,
