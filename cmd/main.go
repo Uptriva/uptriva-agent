@@ -16,17 +16,26 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 )
 
+const (
+	DefaultAPIURL   = "https://api.shxrk.systems"
+	AgentVersion    = "1.0.0"
+	MinInterval     = 15
+	DefaultInterval = 30
+)
+
 type Config struct {
-	APIURL		string	`json:"api_url"`
-	APIKey		string	`json:"api_key"`
-	AgentID		string	`json:"agent_id"`
-	OrgID		string	`json:"org_id"`
-	Interval	int	`json:"interval"`
-	Port		int	`json:"port"`
+	APIURL   string `json:"api_url"`
+	APIKey   string `json:"api_key"`
+	AgentID  string `json:"agent_id"`
+	OrgID    string `json:"org_id"`
+	Interval int    `json:"interval"`
+	Port     int    `json:"port"`
 }
 
 func getEncryptionKey() string {
@@ -122,12 +131,12 @@ func ensureHTTPS(url string) string {
 }
 
 type MetricsPayload struct {
-	CPUUsage	float64	`json:"cpu_usage"`
-	RAMUsage	float64	`json:"ram_usage"`
-	DiskUsage	float64	`json:"disk_usage"`
-	NetIn		int64	`json:"net_in"`
-	NetOut		int64	`json:"net_out"`
-	Processes	string	`json:"processes"`
+	CPUUsage  float64 `json:"cpu_usage"`
+	RAMUsage  float64 `json:"ram_usage"`
+	DiskUsage float64 `json:"disk_usage"`
+	NetIn     int64   `json:"net_in"`
+	NetOut    int64   `json:"net_out"`
+	Processes string  `json:"processes"`
 }
 
 func collectMetrics() (MetricsPayload, error) {
@@ -146,21 +155,19 @@ func collectMetrics() (MetricsPayload, error) {
 	return payload, nil
 }
 
-func performHandshake(apiURL, token string) (Config, error) {
+func performHandshake(token string) (Config, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "unknown-host"
 	}
 
-	apiURL = ensureHTTPS(apiURL)
-
 	hostnameHash := hashHostname(hostname)
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
 
 	payload := map[string]string{
-		"token":		token,
-		"hostname_hash":	hostnameHash,
-		"timestamp":		timestamp,
+		"token":         token,
+		"hostname_hash": hostnameHash,
+		"timestamp":     timestamp,
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -170,7 +177,7 @@ func performHandshake(apiURL, token string) (Config, error) {
 	signature := signPayload(b, token)
 
 	client := &http.Client{
-		Timeout:	10 * time.Second,
+		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
 				MinVersion: tls.VersionTLS12,
@@ -178,7 +185,7 @@ func performHandshake(apiURL, token string) (Config, error) {
 		},
 	}
 
-	req, err := http.NewRequest("POST", apiURL+"/api/v1/agents/handshake", bytes.NewBuffer(b))
+	req, err := http.NewRequest("POST", DefaultAPIURL+"/api/v1/uptime/agents/handshake", bytes.NewBuffer(b))
 	if err != nil {
 		return Config{}, err
 	}
@@ -198,47 +205,149 @@ func performHandshake(apiURL, token string) (Config, error) {
 	}
 
 	var res struct {
-		APIKey	string	`json:"api_key"`
-		AgentID	string	`json:"agent_id"`
-		OrgID	string	`json:"org_id"`
+		APIKey  string `json:"api_key"`
+		AgentID string `json:"agent_id"`
+		OrgID   string `json:"org_id"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return Config{}, err
 	}
 
 	return Config{
-		APIURL:		apiURL,
-		APIKey:		res.APIKey,
-		AgentID:	res.AgentID,
-		OrgID:		res.OrgID,
-		Interval:	10,
+		APIURL:   DefaultAPIURL,
+		APIKey:   res.APIKey,
+		AgentID:  res.AgentID,
+		OrgID:    res.OrgID,
+		Interval: DefaultInterval,
 	}, nil
+}
+
+func getDownloadURL() string {
+	osName := runtime.GOOS
+	arch := runtime.GOARCH
+	filename := "uptime-agent"
+	if osName == "windows" {
+		filename = "uptime-agent.exe"
+	}
+	return fmt.Sprintf("https://download.shxrk.systems/agents/%s/%s/%s", osName, arch, filename)
+}
+
+func checkAndUpdate() bool {
+	resp, err := http.Get("https://download.shxrk.systems/version")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	remoteVersionBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false
+	}
+	remoteVersion := strings.TrimSpace(string(remoteVersionBytes))
+	if remoteVersion == "" || remoteVersion == AgentVersion {
+		return false
+	}
+
+	downloadURL := getDownloadURL()
+	tmpPath := "/usr/local/bin/uptime-agent.new"
+	if runtime.GOOS == "windows" {
+		tmpPath = os.Getenv("TEMP") + "\\uptime-agent.new.exe"
+	}
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	dlResp, err := client.Get(downloadURL)
+	if err != nil {
+		fmt.Printf("Update: failed to download new version: %v\n", err)
+		return false
+	}
+	defer dlResp.Body.Close()
+	if dlResp.StatusCode != http.StatusOK {
+		fmt.Printf("Update: download returned %d\n", dlResp.StatusCode)
+		return false
+	}
+
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		fmt.Printf("Update: failed to create temp file: %v\n", err)
+		return false
+	}
+	_, err = io.Copy(f, dlResp.Body)
+	f.Close()
+	if err != nil {
+		fmt.Printf("Update: failed to write temp file: %v\n", err)
+		return false
+	}
+
+	testCmd := exec.Command(tmpPath, "-version")
+	if err := testCmd.Run(); err != nil {
+		fmt.Printf("Update: downloaded binary is invalid, removing: %v\n", err)
+		os.Remove(tmpPath)
+		return false
+	}
+
+	binPath := "/usr/local/bin/uptime-agent"
+	if runtime.GOOS == "windows" {
+		binPath = "C:\\Program Files\\ShxrkSystems\\uptime-agent.exe"
+	}
+
+	if err := os.Rename(tmpPath, binPath); err != nil {
+		fmt.Printf("Update: failed to replace binary: %v\n", err)
+		os.Remove(tmpPath)
+		return false
+	}
+
+	fmt.Printf("Update: upgraded to %s. Restarting...\n", remoteVersion)
+	return true
 }
 
 func main() {
 	tokenFlag := flag.String("token", "", "")
-	apiFlag := flag.String("api", "https://api.shxrk.systems", "")
-	intervalFlag := flag.Int("interval", 10, "")
+	intervalFlag := flag.Int("interval", DefaultInterval, "")
 	portFlag := flag.Int("port", 0, "")
+	versionFlag := flag.Bool("version", false, "")
+	updateFlag := flag.Bool("update", false, "")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Println(AgentVersion)
+		os.Exit(0)
+	}
+
+	if *updateFlag {
+		fmt.Println("Checking for updates...")
+		if checkAndUpdate() {
+			fmt.Println("Update installed. Restart the agent to use the new version.")
+			os.Exit(0)
+		}
+		fmt.Println("No update available or update failed.")
+		os.Exit(0)
+	}
 
 	configPath := "agent_config.enc"
 	var config Config
 
 	if *tokenFlag != "" {
-		cfg, err := performHandshake(*apiFlag, *tokenFlag)
+		cfg, err := performHandshake(*tokenFlag)
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			os.Exit(1)
 		}
 		config = cfg
-		config.Interval = *intervalFlag
+		if *intervalFlag >= MinInterval {
+			config.Interval = *intervalFlag
+		} else {
+			config.Interval = MinInterval
+		}
 		config.Port = *portFlag
 
 		b, err := encryptConfig(config)
 		if err == nil {
 			_ = os.WriteFile(configPath, b, 0600)
 		}
+		fmt.Println("Agent registered successfully. Config saved.")
+		os.Exit(0)
 	} else {
 		b, err := os.ReadFile(configPath)
 		if err != nil {
@@ -253,8 +362,8 @@ func main() {
 		}
 	}
 
-	if config.Interval <= 0 {
-		config.Interval = 10
+	if config.Interval < MinInterval {
+		config.Interval = MinInterval
 	}
 
 	if config.Port > 0 {
@@ -270,7 +379,6 @@ func main() {
 					next(w, r)
 				}
 			}
-
 			http.HandleFunc("/metrics", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 				payload, err := collectMetrics()
 				if err != nil {
@@ -284,41 +392,53 @@ func main() {
 		}()
 	}
 
-	ticker := time.NewTicker(time.Duration(config.Interval) * time.Second)
-	for range ticker.C {
-		payload, err := collectMetrics()
-		if err != nil {
-			continue
-		}
+	autoUpdate := os.Getenv("AGENT_DISABLE_UPDATE") != "true"
+	var updateTicker *time.Ticker
+	if autoUpdate {
+		updateTicker = time.NewTicker(30 * time.Minute)
+		defer updateTicker.Stop()
+	}
 
-		b, err := json.Marshal(payload)
-		if err != nil {
-			continue
-		}
+	metricTicker := time.NewTicker(time.Duration(config.Interval) * time.Second)
+	defer metricTicker.Stop()
 
-		timestamp := fmt.Sprintf("%d", time.Now().Unix())
-		signature := signPayload(b, config.APIKey)
-
-		req, err := http.NewRequest("POST", config.APIURL+"/api/v1/agents/metrics", bytes.NewBuffer(b))
-		if err != nil {
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Agent-Key", config.APIKey)
-		req.Header.Set("X-Agent-Signature", signature)
-		req.Header.Set("X-Agent-Timestamp", timestamp)
-
-		client := &http.Client{
-			Timeout:	5 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					MinVersion: tls.VersionTLS12,
+	for {
+		select {
+		case <-updateTicker.C:
+			if autoUpdate && checkAndUpdate() {
+				os.Exit(0)
+			}
+		case <-metricTicker.C:
+			payload, err := collectMetrics()
+			if err != nil {
+				continue
+			}
+			b, err := json.Marshal(payload)
+			if err != nil {
+				continue
+			}
+			timestamp := fmt.Sprintf("%d", time.Now().Unix())
+			signature := signPayload(b, config.APIKey)
+			req, err := http.NewRequest("POST", config.APIURL+"/api/v1/uptime/agents/metrics", bytes.NewBuffer(b))
+			if err != nil {
+				continue
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Agent-Key", config.APIKey)
+			req.Header.Set("X-Agent-Signature", signature)
+			req.Header.Set("X-Agent-Timestamp", timestamp)
+			client := &http.Client{
+				Timeout: 5 * time.Second,
+				Transport: &http.Transport{
+					TLSClientConfig: &tls.Config{
+						MinVersion: tls.VersionTLS12,
+					},
 				},
-			},
-		}
-		resp, err := client.Do(req)
-		if err == nil {
-			resp.Body.Close()
+			}
+			resp, err := client.Do(req)
+			if err == nil {
+				resp.Body.Close()
+			}
 		}
 	}
 }

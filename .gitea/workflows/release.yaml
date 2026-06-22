@@ -29,6 +29,7 @@ jobs:
         env:
           DOWNLOAD_API_KEY: ${{ secrets.DOWNLOAD_API_KEY }}
         run: |
+          echo "1.0.0" > dist/version
           tar -czf release.tar.gz -C dist .
           curl -X POST https://download.shxrk.systems/upload \
             -H "Authorization: Bearer $DOWNLOAD_API_KEY" \
