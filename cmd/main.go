@@ -2,13 +2,9 @@ package main
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -39,73 +35,23 @@ type Config struct {
 	Port     int    `json:"port"`
 }
 
-func getEncryptionKey() string {
-	key := os.Getenv("AGENT_ENCRYPTION_KEY")
-	if key == "" {
-		fmt.Println("FATAL: AGENT_ENCRYPTION_KEY environment variable is required")
-		os.Exit(1)
+func saveConfig(config Config) error {
+	b, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return err
 	}
-	if len(key) < 32 {
-		key = key + strings.Repeat("0", 32-len(key))
-	}
-	if len(key) > 32 {
-		key = key[:32]
-	}
-	return key
+	return os.WriteFile("agent_config.json", b, 0600)
 }
 
-func encryptConfig(config Config) ([]byte, error) {
-	key := []byte(getEncryptionKey())
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, err
-	}
-
-	plaintext, _ := json.Marshal(config)
-	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
-	return []byte(base64.StdEncoding.EncodeToString(ciphertext)), nil
-}
-
-func decryptConfig(encrypted []byte) (Config, error) {
-	key := []byte(getEncryptionKey())
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return Config{}, err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return Config{}, err
-	}
-
-	decoded, err := base64.StdEncoding.DecodeString(string(encrypted))
-	if err != nil {
-		return Config{}, err
-	}
-
-	nonceSize := gcm.NonceSize()
-	if len(decoded) < nonceSize {
-		return Config{}, fmt.Errorf("ciphertext too short")
-	}
-
-	nonce, ciphertext := decoded[:nonceSize], decoded[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return Config{}, err
-	}
-
+func loadConfig() (Config, error) {
 	var config Config
-	json.Unmarshal(plaintext, &config)
+	b, err := os.ReadFile("agent_config.json")
+	if err != nil {
+		return config, err
+	}
+	if err := json.Unmarshal(b, &config); err != nil {
+		return config, err
+	}
 	return config, nil
 }
 
@@ -316,7 +262,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	configPath := "agent_config.enc"
 	var config Config
 
 	if *tokenFlag != "" {
@@ -333,24 +278,20 @@ func main() {
 		}
 		config.Port = *portFlag
 
-		b, err := encryptConfig(config)
-		if err == nil {
-			_ = os.WriteFile(configPath, b, 0600)
+		if err := saveConfig(config); err != nil {
+			fmt.Printf("Error saving config: %v\n", err)
+			os.Exit(1)
 		}
 		fmt.Println("Agent registered successfully. Config saved.")
 		os.Exit(0)
 	} else {
-		b, err := os.ReadFile(configPath)
+		cfg, err := loadConfig()
 		if err != nil {
-			fmt.Println("Error: Config file agent_config.enc not found and no --token provided.")
+			fmt.Println("Error: Config file agent_config.json not found and no --token provided.")
 			flag.Usage()
 			os.Exit(1)
 		}
-		config, err = decryptConfig(b)
-		if err != nil {
-			fmt.Printf("Error parsing config file: %v\n", err)
-			os.Exit(1)
-		}
+		config = cfg
 	}
 
 	if config.Interval < MinInterval {
