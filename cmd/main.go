@@ -28,9 +28,8 @@ const (
 
 type Config struct {
 	APIURL   string `json:"api_url"`
-	APIKey   string `json:"api_key"`
+	Token    string `json:"token"`
 	AgentID  string `json:"agent_id"`
-	OrgID    string `json:"org_id"`
 	Interval int    `json:"interval"`
 	Port     int    `json:"port"`
 }
@@ -53,12 +52,6 @@ func loadConfig() (Config, error) {
 		return config, err
 	}
 	return config, nil
-}
-
-func hashHostname(hostname string) string {
-	h := sha256.New()
-	h.Write([]byte(hostname))
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 func signPayload(payload []byte, apiKey string) string {
@@ -98,13 +91,13 @@ func performHandshake(token string) (Config, error) {
 		hostname = "unknown-host"
 	}
 
-	hostnameHash := hashHostname(hostname)
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
 
 	payload := map[string]string{
-		"token":         token,
-		"hostname_hash": hostnameHash,
-		"timestamp":     timestamp,
+		"token":     token,
+		"hostname":  hostname,
+		"version":   AgentVersion,
+		"timestamp": timestamp,
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -142,9 +135,7 @@ func performHandshake(token string) (Config, error) {
 	}
 
 	var res struct {
-		APIKey  string `json:"api_key"`
 		AgentID string `json:"agent_id"`
-		OrgID   string `json:"org_id"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return Config{}, err
@@ -152,9 +143,8 @@ func performHandshake(token string) (Config, error) {
 
 	return Config{
 		APIURL:   DefaultAPIURL,
-		APIKey:   res.APIKey,
+		Token:    token,
 		AgentID:  res.AgentID,
-		OrgID:    res.OrgID,
 		Interval: DefaultInterval,
 	}, nil
 }
@@ -303,7 +293,7 @@ func main() {
 			authMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
 				return func(w http.ResponseWriter, r *http.Request) {
 					authHeader := r.Header.Get("Authorization")
-					expectedAuth := "Bearer " + config.APIKey
+					expectedAuth := "Bearer " + config.Token
 					if authHeader != expectedAuth {
 						http.Error(w, "Unauthorized", http.StatusUnauthorized)
 						return
@@ -349,16 +339,12 @@ func main() {
 			if err != nil {
 				continue
 			}
-			timestamp := fmt.Sprintf("%d", time.Now().Unix())
-			signature := signPayload(b, config.APIKey)
 			req, err := http.NewRequest("POST", config.APIURL+"/api/v1/uptime/agents/metrics", bytes.NewBuffer(b))
 			if err != nil {
 				continue
 			}
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("X-Agent-Key", config.APIKey)
-			req.Header.Set("X-Agent-Signature", signature)
-			req.Header.Set("X-Agent-Timestamp", timestamp)
+			req.Header.Set("X-Agent-Token", config.Token)
 			client := &http.Client{
 				Timeout: 5 * time.Second,
 				Transport: &http.Transport{
