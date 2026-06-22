@@ -120,16 +120,6 @@ func signPayload(payload []byte, apiKey string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func ensureHTTPS(url string) string {
-	if strings.HasPrefix(url, "http://") {
-		return "https://" + strings.TrimPrefix(url, "http://")
-	}
-	if !strings.HasPrefix(url, "https://") {
-		return "https://" + url
-	}
-	return url
-}
-
 type MetricsPayload struct {
 	CPUUsage  float64 `json:"cpu_usage"`
 	RAMUsage  float64 `json:"ram_usage"`
