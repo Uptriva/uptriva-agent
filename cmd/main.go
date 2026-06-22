@@ -272,8 +272,7 @@ func main() {
 			fmt.Printf("Error saving config: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println("Agent registered successfully. Config saved.")
-		os.Exit(0)
+		fmt.Println("Agent registered successfully. Starting metric collection...")
 	} else {
 		cfg, err := loadConfig()
 		if err != nil {
@@ -354,8 +353,15 @@ func main() {
 				},
 			}
 			resp, err := client.Do(req)
-			if err == nil {
-				resp.Body.Close()
+			if err != nil {
+				fmt.Printf("[agent] failed to send metrics: %v\n", err)
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode == 204 {
+				fmt.Printf("[agent] metrics sent successfully (%s)\n", time.Now().Format("15:04:05"))
+			} else {
+				fmt.Printf("[agent] metrics endpoint returned %d\n", resp.StatusCode)
 			}
 		}
 	}
