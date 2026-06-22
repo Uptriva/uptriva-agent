@@ -24,7 +24,7 @@ import (
 
 const (
 	DefaultAPIURL   = "https://api.shxrk.systems"
-	AgentVersion    = "1.0.0"
+	AgentVersion    = "1.0.1"
 	MinInterval     = 15
 	DefaultInterval = 30
 )
