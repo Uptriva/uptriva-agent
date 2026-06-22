@@ -16,20 +16,30 @@ jobs:
         with:
           go-version: '1.25.5'
 
+      - name: Read Version
+        id: version
+        run: |
+          VERSION=$(cat VERSION)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - name: Build Static Agents for Multi-Platforms
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir -p dist/linux/amd64 dist/linux/arm64 dist/windows/amd64 dist/darwin/amd64 dist/darwin/arm64
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/linux/amd64/uptime-agent cmd/main.go cmd/metrics.go
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/linux/arm64/uptime-agent cmd/main.go cmd/metrics.go
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/windows/amd64/uptime-agent.exe cmd/main.go cmd/metrics.go
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/darwin/amd64/uptime-agent cmd/main.go cmd/metrics.go
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/darwin/arm64/uptime-agent cmd/main.go cmd/metrics.go
+          LDFLAGS="-s -w -X main.AgentVersion=${VERSION}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/linux/amd64/uptime-agent cmd/main.go cmd/metrics.go
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/linux/arm64/uptime-agent cmd/main.go cmd/metrics.go
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/windows/amd64/uptime-agent.exe cmd/main.go cmd/metrics.go
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/darwin/amd64/uptime-agent cmd/main.go cmd/metrics.go
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/darwin/arm64/uptime-agent cmd/main.go cmd/metrics.go
 
       - name: Compress and Upload to Download Server
         env:
           DOWNLOAD_API_KEY: ${{ secrets.DOWNLOAD_API_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          echo "1.0.1" > dist/version
+          echo "$VERSION" > dist/version
           tar -czf release.tar.gz -C dist .
           curl -X POST https://download.shxrk.systems/upload \
             -H "Authorization: Bearer $DOWNLOAD_API_KEY" \
