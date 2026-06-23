@@ -73,6 +73,7 @@ type MetricsPayload struct {
 	NetIn     int64   `json:"net_in"`
 	NetOut    int64   `json:"net_out"`
 	Processes string  `json:"processes"`
+	Interval  int     `json:"interval"`
 }
 
 func collectMetrics() (MetricsPayload, error) {
@@ -106,6 +107,15 @@ func collectMetrics() (MetricsPayload, error) {
 	return payload, nil
 }
 
+func collectMetricsWithInterval(interval int) (MetricsPayload, error) {
+	p, err := collectMetrics()
+	if err != nil {
+		return p, err
+	}
+	p.Interval = interval
+	return p, nil
+}
+
 func performHandshake(token string) (Config, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -114,11 +124,17 @@ func performHandshake(token string) (Config, error) {
 
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
 
-	payload := map[string]string{
+	interval := DefaultInterval
+	if cfg, err := loadConfig(); err == nil && cfg.Interval > 0 {
+		interval = cfg.Interval
+	}
+
+	payload := map[string]interface{}{
 		"token":     token,
 		"hostname":  hostname,
 		"version":   AgentVersion,
 		"timestamp": timestamp,
+		"interval":  interval,
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -308,6 +324,8 @@ func main() {
 		config.Interval = MinInterval
 	}
 
+	go startMonitorChecker(config.APIURL, config.Token)
+
 	if config.Port > 0 {
 		go func() {
 			authMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
@@ -351,7 +369,7 @@ func main() {
 				os.Exit(0)
 			}
 		case <-metricTicker.C:
-			payload, err := collectMetrics()
+			payload, err := collectMetricsWithInterval(config.Interval)
 			if err != nil {
 				continue
 			}
