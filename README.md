@@ -61,12 +61,43 @@ This starts a local metrics endpoint on `http://127.0.0.1:8080/metrics` (protect
 
 ## Configuration
 
-The agent stores configuration in `agent_config.enc` (encrypted). Configuration includes:
-- API URL
-- API Key
-- Agent ID
-- Organization ID
-- Check interval (default: 10 seconds)
+The agent stores configuration in `agent_config.json` in its working directory.
+
+### Linux / macOS (installed via setup script)
+
+- Config file: `/etc/shxrk/agent_config.json`
+- Binary: `/usr/local/bin/uptime-agent`
+- Working directory: `/etc/shxrk`
+
+### Windows
+
+- Default binary: `C:\Program Files\ShxrkSystems\uptime-agent.exe`
+- Config file: `agent_config.json` in the working directory from which the agent is started
+
+### Config fields
+
+```json
+{
+  "api_url": "https://api.shxrk.systems",
+  "token": "...",
+  "agent_id": "...",
+  "interval": 30,
+  "port": 0,
+  "auto_update_enabled": true,
+  "auto_update_interval_minutes": 30
+}
+```
+
+- `interval` — metric collection interval in seconds (minimum: 15)
+- `port` — optional local metrics endpoint on `http://127.0.0.1:{port}/metrics`
+- `auto_update_enabled` — enable/disable automatic self-updates
+- `auto_update_interval_minutes` — how often to check for updates
+
+After editing the config, restart the agent:
+
+```bash
+sudo systemctl restart uptime-agent
+```
 
 ## Metrics Collected
 

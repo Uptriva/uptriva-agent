@@ -27,17 +27,21 @@ var (
 )
 
 const (
-	DefaultAPIURL   = "https://api.shxrk.systems"
-	MinInterval     = 15
-	DefaultInterval = 30
+	DefaultAPIURL                    = "https://api.shxrk.systems"
+	MinInterval                      = 15
+	DefaultInterval                  = 30
+	DefaultAutoUpdateEnabled         = true
+	DefaultAutoUpdateIntervalMinutes = 30
 )
 
 type Config struct {
-	APIURL   string `json:"api_url"`
-	Token    string `json:"token"`
-	AgentID  string `json:"agent_id"`
-	Interval int    `json:"interval"`
-	Port     int    `json:"port"`
+	APIURL                    string `json:"api_url"`
+	Token                     string `json:"token"`
+	AgentID                   string `json:"agent_id"`
+	Interval                  int    `json:"interval"`
+	Port                      int    `json:"port"`
+	AutoUpdateEnabled         bool   `json:"auto_update_enabled"`
+	AutoUpdateIntervalMinutes int    `json:"auto_update_interval_minutes"`
 }
 
 func saveConfig(config Config) error {
@@ -56,6 +60,9 @@ func loadConfig() (Config, error) {
 	}
 	if err := json.Unmarshal(b, &config); err != nil {
 		return config, err
+	}
+	if config.AutoUpdateIntervalMinutes <= 0 {
+		config.AutoUpdateIntervalMinutes = DefaultAutoUpdateIntervalMinutes
 	}
 	return config, nil
 }
@@ -179,10 +186,12 @@ func performHandshake(token string) (Config, error) {
 	}
 
 	return Config{
-		APIURL:   DefaultAPIURL,
-		Token:    token,
-		AgentID:  res.AgentID,
-		Interval: DefaultInterval,
+		APIURL:                    DefaultAPIURL,
+		Token:                     token,
+		AgentID:                   res.AgentID,
+		Interval:                  DefaultInterval,
+		AutoUpdateEnabled:         DefaultAutoUpdateEnabled,
+		AutoUpdateIntervalMinutes: DefaultAutoUpdateIntervalMinutes,
 	}, nil
 }
 
@@ -324,6 +333,16 @@ func main() {
 		config.Interval = MinInterval
 	}
 
+	autoUpdate := config.AutoUpdateEnabled
+	if os.Getenv("AGENT_DISABLE_UPDATE") == "true" {
+		autoUpdate = false
+	}
+	if autoUpdate {
+		fmt.Printf("[agent] auto-update enabled every %d minutes\n", config.AutoUpdateIntervalMinutes)
+	} else {
+		fmt.Println("[agent] auto-update disabled")
+	}
+
 	go startMonitorChecker(config.APIURL, config.Token)
 
 	if config.Port > 0 {
@@ -352,10 +371,13 @@ func main() {
 		}()
 	}
 
-	autoUpdate := os.Getenv("AGENT_DISABLE_UPDATE") != "true"
 	var updateTicker *time.Ticker
 	if autoUpdate {
-		updateTicker = time.NewTicker(30 * time.Minute)
+		updateInterval := time.Duration(config.AutoUpdateIntervalMinutes) * time.Minute
+		if updateInterval <= 0 {
+			updateInterval = DefaultAutoUpdateIntervalMinutes * time.Minute
+		}
+		updateTicker = time.NewTicker(updateInterval)
 		defer updateTicker.Stop()
 	}
 
