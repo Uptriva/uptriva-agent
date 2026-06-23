@@ -20,6 +20,12 @@ import (
 
 var AgentVersion = "dev"
 
+var (
+	prevNetIn  int64
+	prevNetOut int64
+	prevNetTs  time.Time
+)
+
 const (
 	DefaultAPIURL   = "https://api.shxrk.systems"
 	MinInterval     = 15
@@ -76,9 +82,24 @@ func collectMetrics() (MetricsPayload, error) {
 	payload.RAMUsage = getRAMUsage()
 	payload.DiskUsage = getDiskUsage()
 
-	netIn, netOut := getNetworkBytes()
-	payload.NetIn = netIn
-	payload.NetOut = netOut
+	now := time.Now()
+	curIn, curOut := getNetworkBytes()
+	if !prevNetTs.IsZero() {
+		elapsed := now.Sub(prevNetTs).Seconds()
+		if elapsed > 0 {
+			payload.NetIn = int64(float64(curIn-prevNetIn) / elapsed)
+			payload.NetOut = int64(float64(curOut-prevNetOut) / elapsed)
+			if payload.NetIn < 0 {
+				payload.NetIn = 0
+			}
+			if payload.NetOut < 0 {
+				payload.NetOut = 0
+			}
+		}
+	}
+	prevNetIn = curIn
+	prevNetOut = curOut
+	prevNetTs = now
 
 	payload.Processes = getRunningProcesses()
 
