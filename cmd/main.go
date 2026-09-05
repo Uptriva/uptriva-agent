@@ -28,6 +28,7 @@ var (
 
 const (
 	DefaultAPIURL                    = "https://api.shxrk.systems"
+	DefaultDownloadURL               = "https://download.shxrk.systems"
 	MinInterval                      = 15
 	DefaultInterval                  = 30
 	DefaultAutoUpdateEnabled         = true
@@ -42,6 +43,7 @@ type Config struct {
 	Port                      int    `json:"port"`
 	AutoUpdateEnabled         bool   `json:"auto_update_enabled"`
 	AutoUpdateIntervalMinutes int    `json:"auto_update_interval_minutes"`
+	AcceptedPrivacyPolicy     string `json:"accepted_privacy_policy"`
 }
 
 func saveConfig(config Config) error {
@@ -195,83 +197,215 @@ func performHandshake(token string) (Config, error) {
 	}, nil
 }
 
-func getDownloadURL() string {
-	osName := runtime.GOOS
-	arch := runtime.GOARCH
-	filename := "uptime-agent"
-	if osName == "windows" {
-		filename = "uptime-agent.exe"
-	}
-	return fmt.Sprintf("https://download.shxrk.systems/agents/%s/%s/%s", osName, arch, filename)
+type AgentManifest struct {
+	Version              string                   `json:"version"`
+	MinAgentVersion      string                   `json:"min_agent_version"`
+	PrivacyPolicyVersion string                   `json:"privacy_policy_version"`
+	PrivacyPolicyURL     string                   `json:"privacy_policy_url"`
+	ReleaseNotes         string                   `json:"release_notes"`
+	RequiresConsent      bool                     `json:"requires_consent"`
+	Platforms            map[string]PlatformAsset `json:"platforms"`
 }
 
-func checkAndUpdate() bool {
-	resp, err := http.Get("https://download.shxrk.systems/version")
+type PlatformAsset struct {
+	Checksum string `json:"checksum"`
+	URL      string `json:"url"`
+}
+
+func fetchManifest(downloadURL string) (*AgentManifest, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(downloadURL + "/manifest")
 	if err != nil {
-		return false
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return false
+		return nil, fmt.Errorf("manifest endpoint returned %d", resp.StatusCode)
 	}
-	remoteVersionBytes, err := io.ReadAll(resp.Body)
+	var manifest AgentManifest
+	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
+		return nil, err
+	}
+	return &manifest, nil
+}
+
+func compareVersions(a, b string) int {
+	aParts := strings.Split(a, ".")
+	bParts := strings.Split(b, ".")
+	maxLen := len(aParts)
+	if len(bParts) > maxLen {
+		maxLen = len(bParts)
+	}
+	for i := 0; i < maxLen; i++ {
+		var aNum, bNum int
+		if i < len(aParts) {
+			fmt.Sscanf(aParts[i], "%d", &aNum)
+		}
+		if i < len(bParts) {
+			fmt.Sscanf(bParts[i], "%d", &bNum)
+		}
+		if aNum < bNum {
+			return -1
+		}
+		if aNum > bNum {
+			return 1
+		}
+	}
+	return 0
+}
+
+func getPlatformKey() string {
+	return runtime.GOOS + "/" + runtime.GOARCH
+}
+
+func getBinaryPath() string {
+	if runtime.GOOS == "windows" {
+		return "C:\\Program Files\\ShxrkSystems\\uptime-agent.exe"
+	}
+	return "/usr/local/bin/uptime-agent"
+}
+
+func getCurrentBinaryPath() string {
+	exe, err := os.Executable()
 	if err != nil {
-		return false
+		return getBinaryPath()
 	}
-	remoteVersion := strings.TrimSpace(string(remoteVersionBytes))
-	if remoteVersion == "" || remoteVersion == AgentVersion {
-		return false
+	return exe
+}
+
+type UpdateResult struct {
+	Updated              bool
+	RequiresConsent      bool
+	PrivacyPolicyVersion string
+	PrivacyPolicyURL     string
+	ReleaseNotes         string
+	NewVersion           string
+}
+
+func checkForUpdate(config Config) (*UpdateResult, error) {
+	manifest, err := fetchManifest(DefaultDownloadURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch manifest: %w", err)
 	}
 
-	downloadURL := getDownloadURL()
-	tmpPath := "/usr/local/bin/uptime-agent.new"
+	if compareVersions(manifest.Version, AgentVersion) <= 0 {
+		return &UpdateResult{Updated: false}, nil
+	}
+
+	if manifest.RequiresConsent && config.AcceptedPrivacyPolicy != manifest.PrivacyPolicyVersion {
+		return &UpdateResult{
+			Updated:              false,
+			RequiresConsent:      true,
+			PrivacyPolicyVersion: manifest.PrivacyPolicyVersion,
+			PrivacyPolicyURL:     manifest.PrivacyPolicyURL,
+			ReleaseNotes:         manifest.ReleaseNotes,
+			NewVersion:           manifest.Version,
+		}, nil
+	}
+
+	return &UpdateResult{
+		Updated:         false,
+		RequiresConsent: false,
+		ReleaseNotes:    manifest.ReleaseNotes,
+		NewVersion:      manifest.Version,
+	}, nil
+}
+
+func downloadAndInstallUpdate(manifest *AgentManifest) error {
+	platformKey := getPlatformKey()
+	asset, ok := manifest.Platforms[platformKey]
+	if !ok {
+		return fmt.Errorf("no binary available for platform %s", platformKey)
+	}
+
+	downloadFullURL := DefaultDownloadURL + asset.URL
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Get(downloadFullURL)
+	if err != nil {
+		return fmt.Errorf("failed to download: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download returned %d", resp.StatusCode)
+	}
+
+	tmpPath := getCurrentBinaryPath() + ".new"
 	if runtime.GOOS == "windows" {
 		tmpPath = os.Getenv("TEMP") + "\\uptime-agent.new.exe"
 	}
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	dlResp, err := client.Get(downloadURL)
-	if err != nil {
-		fmt.Printf("Update: failed to download new version: %v\n", err)
-		return false
-	}
-	defer dlResp.Body.Close()
-	if dlResp.StatusCode != http.StatusOK {
-		fmt.Printf("Update: download returned %d\n", dlResp.StatusCode)
-		return false
-	}
-
 	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
-		fmt.Printf("Update: failed to create temp file: %v\n", err)
-		return false
+		return fmt.Errorf("failed to create temp file: %w", err)
 	}
-	_, err = io.Copy(f, dlResp.Body)
+
+	h := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(f, h), resp.Body); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
 	f.Close()
-	if err != nil {
-		fmt.Printf("Update: failed to write temp file: %v\n", err)
-		return false
+
+	actualChecksum := hex.EncodeToString(h.Sum(nil))
+	if actualChecksum != asset.Checksum {
+		os.Remove(tmpPath)
+		return fmt.Errorf("checksum mismatch: expected %s, got %s", asset.Checksum, actualChecksum)
 	}
 
 	testCmd := exec.Command(tmpPath, "-version")
 	if err := testCmd.Run(); err != nil {
-		fmt.Printf("Update: downloaded binary is invalid, removing: %v\n", err)
 		os.Remove(tmpPath)
-		return false
+		return fmt.Errorf("downloaded binary is invalid: %w", err)
 	}
 
-	binPath := "/usr/local/bin/uptime-agent"
-	if runtime.GOOS == "windows" {
-		binPath = "C:\\Program Files\\ShxrkSystems\\uptime-agent.exe"
+	binPath := getCurrentBinaryPath()
+	backupPath := binPath + ".bak"
+
+	if _, err := os.Stat(binPath); err == nil {
+		os.Rename(binPath, backupPath)
 	}
 
 	if err := os.Rename(tmpPath, binPath); err != nil {
-		fmt.Printf("Update: failed to replace binary: %v\n", err)
+		if _, berr := os.Stat(backupPath); berr == nil {
+			os.Rename(backupPath, binPath)
+		}
 		os.Remove(tmpPath)
+		return fmt.Errorf("failed to replace binary: %w", err)
+	}
+
+	os.Remove(backupPath)
+	return nil
+}
+
+func performUpdate(config *Config) bool {
+	manifest, err := fetchManifest(DefaultDownloadURL)
+	if err != nil {
+		fmt.Printf("[update] failed to fetch manifest: %v\n", err)
 		return false
 	}
 
-	fmt.Printf("Update: upgraded to %s. Restarting...\n", remoteVersion)
+	if compareVersions(manifest.Version, AgentVersion) <= 0 {
+		return false
+	}
+
+	if manifest.RequiresConsent && config.AcceptedPrivacyPolicy != manifest.PrivacyPolicyVersion {
+		fmt.Printf("[update] update to %s available but requires privacy policy consent (v%s)\n", manifest.Version, manifest.PrivacyPolicyVersion)
+		fmt.Printf("[update] review at %s\n", manifest.PrivacyPolicyURL)
+		fmt.Println("[update] run: uptime-agent -accept-privacy-policy to consent and update")
+		return false
+	}
+
+	fmt.Printf("[update] upgrading from %s to %s...\n", AgentVersion, manifest.Version)
+	if err := downloadAndInstallUpdate(manifest); err != nil {
+		fmt.Printf("[update] failed: %v\n", err)
+		return false
+	}
+
+	config.AcceptedPrivacyPolicy = manifest.PrivacyPolicyVersion
+	_ = saveConfig(*config)
+
+	fmt.Printf("[update] successfully upgraded to %s\n", manifest.Version)
 	return true
 }
 
@@ -281,6 +415,8 @@ func main() {
 	portFlag := flag.Int("port", 0, "")
 	versionFlag := flag.Bool("version", false, "")
 	updateFlag := flag.Bool("update", false, "")
+	checkUpdateFlag := flag.Bool("check-update", false, "")
+	acceptPrivacyFlag := flag.Bool("accept-privacy-policy", false, "")
 	flag.Parse()
 
 	if *versionFlag {
@@ -288,9 +424,64 @@ func main() {
 		os.Exit(0)
 	}
 
+	if *checkUpdateFlag {
+		config, err := loadConfig()
+		if err != nil {
+			config = Config{}
+		}
+		result, err := checkForUpdate(config)
+		if err != nil {
+			fmt.Printf("Error checking for update: %v\n", err)
+			os.Exit(1)
+		}
+		if result.RequiresConsent {
+			fmt.Printf("Update available: %s -> %s\n", AgentVersion, result.NewVersion)
+			fmt.Printf("Privacy policy changed (v%s). Review: %s\n", result.PrivacyPolicyVersion, result.PrivacyPolicyURL)
+			fmt.Println("Run: uptime-agent -accept-privacy-policy to consent and update")
+			os.Exit(0)
+		}
+		if result.NewVersion != "" {
+			fmt.Printf("Update available: %s -> %s\n", AgentVersion, result.NewVersion)
+			os.Exit(0)
+		}
+		fmt.Println("No update available.")
+		os.Exit(0)
+	}
+
+	if *acceptPrivacyFlag {
+		config, err := loadConfig()
+		if err != nil {
+			fmt.Printf("Error loading config: %v\n", err)
+			os.Exit(1)
+		}
+		manifest, err := fetchManifest(DefaultDownloadURL)
+		if err != nil {
+			fmt.Printf("Error fetching manifest: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Accepting privacy policy v%s\n", manifest.PrivacyPolicyVersion)
+		fmt.Printf("Review at: %s\n", manifest.PrivacyPolicyURL)
+		config.AcceptedPrivacyPolicy = manifest.PrivacyPolicyVersion
+		if err := saveConfig(config); err != nil {
+			fmt.Printf("Error saving config: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Privacy policy accepted. Proceeding with update...")
+		if performUpdate(&config) {
+			fmt.Println("Update installed. Restart the agent to use the new version.")
+			os.Exit(0)
+		}
+		fmt.Println("No update available or update failed.")
+		os.Exit(0)
+	}
+
 	if *updateFlag {
 		fmt.Println("Checking for updates...")
-		if checkAndUpdate() {
+		config, err := loadConfig()
+		if err != nil {
+			config = Config{}
+		}
+		if performUpdate(&config) {
 			fmt.Println("Update installed. Restart the agent to use the new version.")
 			os.Exit(0)
 		}
@@ -387,7 +578,7 @@ func main() {
 	for {
 		select {
 		case <-updateTicker.C:
-			if autoUpdate && checkAndUpdate() {
+			if autoUpdate && performUpdate(&config) {
 				os.Exit(0)
 			}
 		case <-metricTicker.C:

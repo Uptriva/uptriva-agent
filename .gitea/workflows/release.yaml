@@ -34,12 +34,29 @@ jobs:
           CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/darwin/amd64/uptime-agent ./cmd/
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/darwin/arm64/uptime-agent ./cmd/
 
+      - name: Generate Checksums and Metadata
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "$VERSION" > dist/version
+          echo "$VERSION" > dist/min_agent_version
+          if [ -f privacy_policy_version ]; then
+            cp privacy_policy_version dist/privacy_policy_version
+          else
+            echo "1.0.0" > dist/privacy_policy_version
+          fi
+          if [ -f release_notes.md ]; then
+            cp release_notes.md dist/release_notes.md
+          fi
+          if [ -f requires_consent ]; then
+            touch dist/requires_consent
+          fi
+
       - name: Compress and Upload to Download Server
         env:
           DOWNLOAD_API_KEY: ${{ secrets.DOWNLOAD_API_KEY }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          echo "$VERSION" > dist/version
           tar -czf release.tar.gz -C dist .
           curl -X POST https://download.shxrk.systems/upload \
             -H "Authorization: Bearer $DOWNLOAD_API_KEY" \
