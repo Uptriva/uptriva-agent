@@ -44,6 +44,7 @@ type Config struct {
 	AutoUpdateEnabled         bool   `json:"auto_update_enabled"`
 	AutoUpdateIntervalMinutes int    `json:"auto_update_interval_minutes"`
 	AcceptedPrivacyPolicy     string `json:"accepted_privacy_policy"`
+	BetaChannel               bool   `json:"beta_channel"`
 }
 
 func saveConfig(config Config) error {
@@ -212,9 +213,13 @@ type PlatformAsset struct {
 	URL      string `json:"url"`
 }
 
-func fetchManifest(downloadURL string) (*AgentManifest, error) {
+func fetchManifest(downloadURL string, betaChannel bool) (*AgentManifest, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(downloadURL + "/manifest")
+	manifestPath := "/manifest"
+	if betaChannel {
+		manifestPath = "/manifest/beta"
+	}
+	resp, err := client.Get(downloadURL + manifestPath)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +288,7 @@ type UpdateResult struct {
 }
 
 func checkForUpdate(config Config) (*UpdateResult, error) {
-	manifest, err := fetchManifest(DefaultDownloadURL)
+	manifest, err := fetchManifest(DefaultDownloadURL, config.BetaChannel)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch manifest: %w", err)
 	}
@@ -379,7 +384,7 @@ func downloadAndInstallUpdate(manifest *AgentManifest) error {
 }
 
 func performUpdate(config *Config) bool {
-	manifest, err := fetchManifest(DefaultDownloadURL)
+	manifest, err := fetchManifest(DefaultDownloadURL, config.BetaChannel)
 	if err != nil {
 		fmt.Printf("[update] failed to fetch manifest: %v\n", err)
 		return false
@@ -417,6 +422,7 @@ func main() {
 	updateFlag := flag.Bool("update", false, "")
 	checkUpdateFlag := flag.Bool("check-update", false, "")
 	acceptPrivacyFlag := flag.Bool("accept-privacy-policy", false, "")
+	betaFlag := flag.Bool("beta", false, "")
 	flag.Parse()
 
 	if *versionFlag {
@@ -428,6 +434,12 @@ func main() {
 		config, err := loadConfig()
 		if err != nil {
 			config = Config{}
+		}
+		if *betaFlag {
+			config.BetaChannel = true
+		}
+		if config.BetaChannel {
+			fmt.Println("[check-update] using beta channel")
 		}
 		result, err := checkForUpdate(config)
 		if err != nil {
@@ -454,7 +466,10 @@ func main() {
 			fmt.Printf("Error loading config: %v\n", err)
 			os.Exit(1)
 		}
-		manifest, err := fetchManifest(DefaultDownloadURL)
+		if *betaFlag {
+			config.BetaChannel = true
+		}
+		manifest, err := fetchManifest(DefaultDownloadURL, config.BetaChannel)
 		if err != nil {
 			fmt.Printf("Error fetching manifest: %v\n", err)
 			os.Exit(1)
@@ -481,6 +496,13 @@ func main() {
 		if err != nil {
 			config = Config{}
 		}
+		if *betaFlag {
+			config.BetaChannel = true
+			_ = saveConfig(config)
+		}
+		if config.BetaChannel {
+			fmt.Println("[update] using beta channel")
+		}
 		if performUpdate(&config) {
 			fmt.Println("Update installed. Restart the agent to use the new version.")
 			os.Exit(0)
@@ -504,6 +526,9 @@ func main() {
 			config.Interval = MinInterval
 		}
 		config.Port = *portFlag
+		if *betaFlag {
+			config.BetaChannel = true
+		}
 
 		if err := saveConfig(config); err != nil {
 			fmt.Printf("Error saving config: %v\n", err)
@@ -522,6 +547,15 @@ func main() {
 
 	if config.Interval < MinInterval {
 		config.Interval = MinInterval
+	}
+
+	if *betaFlag && !config.BetaChannel {
+		config.BetaChannel = true
+		_ = saveConfig(config)
+	}
+
+	if config.BetaChannel {
+		fmt.Println("[agent] BETA CHANNEL enabled - fetching beta manifests")
 	}
 
 	autoUpdate := config.AutoUpdateEnabled

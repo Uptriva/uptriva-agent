@@ -1,0 +1,64 @@
+name: Build and Push Uptime Agent (Beta)
+
+on:
+  push:
+    branches: [ "beta" ]
+
+jobs:
+  build-uptime-agent-beta:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25.5'
+
+      - name: Read Version
+        id: version
+        run: |
+          VERSION=$(cat VERSION)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build Static Agents for Multi-Platforms
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist/linux/amd64 dist/linux/arm64 dist/windows/amd64 dist/darwin/amd64 dist/darwin/arm64
+          LDFLAGS="-s -w -X main.AgentVersion=${VERSION}-beta"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/linux/amd64/uptime-agent ./cmd/
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/linux/arm64/uptime-agent ./cmd/
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/windows/amd64/uptime-agent.exe ./cmd/
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/darwin/amd64/uptime-agent ./cmd/
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/darwin/arm64/uptime-agent ./cmd/
+
+      - name: Generate Checksums and Metadata
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "${VERSION}-beta" > dist/version
+          echo "${VERSION}-beta" > dist/min_agent_version
+          if [ -f privacy_policy_version ]; then
+            cp privacy_policy_version dist/privacy_policy_version
+          else
+            echo "1.0.0" > dist/privacy_policy_version
+          fi
+          if [ -f release_notes.md ]; then
+            cp release_notes.md dist/release_notes.md
+          fi
+          if [ -f requires_consent ]; then
+            touch dist/requires_consent
+          fi
+
+      - name: Compress and Upload to Download Server (Beta)
+        env:
+          DOWNLOAD_BETA_API_KEY: ${{ secrets.DOWNLOAD_BETA_API_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tar -czf release.tar.gz -C dist .
+          curl -X POST https://download.shxrk.systems/upload/beta \
+            -H "Authorization: Bearer $DOWNLOAD_BETA_API_KEY" \
+            -F "file=@release.tar.gz" \
+            --fail --show-error --silent
