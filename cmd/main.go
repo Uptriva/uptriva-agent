@@ -84,6 +84,7 @@ type MetricsPayload struct {
 	NetOut    int64   `json:"net_out"`
 	Processes string  `json:"processes"`
 	Interval  int     `json:"interval"`
+	Version   string  `json:"version"`
 }
 
 func collectMetrics() (MetricsPayload, error) {
@@ -123,6 +124,7 @@ func collectMetricsWithInterval(interval int) (MetricsPayload, error) {
 		return p, err
 	}
 	p.Interval = interval
+	p.Version = AgentVersion
 	return p, nil
 }
 
