@@ -597,12 +597,14 @@ func main() {
 	}
 
 	var updateTicker *time.Ticker
+	var updateCh <-chan time.Time
 	if autoUpdate {
 		updateInterval := time.Duration(config.AutoUpdateIntervalMinutes) * time.Minute
 		if updateInterval <= 0 {
 			updateInterval = DefaultAutoUpdateIntervalMinutes * time.Minute
 		}
 		updateTicker = time.NewTicker(updateInterval)
+		updateCh = updateTicker.C
 		defer updateTicker.Stop()
 	}
 
@@ -611,7 +613,7 @@ func main() {
 
 	for {
 		select {
-		case <-updateTicker.C:
+		case <-updateCh:
 			if autoUpdate && performUpdate(&config) {
 				os.Exit(0)
 			}
