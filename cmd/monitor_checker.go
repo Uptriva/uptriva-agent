@@ -155,13 +155,14 @@ func runMonitorCheck(monitor AssignedMonitor) MonitorCheckResult {
 	}
 }
 
-func submitMonitorResult(apiURL, monitorID string, result MonitorCheckResult) error {
+func submitMonitorResult(apiURL, monitorID, token string, result MonitorCheckResult) error {
 	payload, _ := json.Marshal(result)
 	req, err := http.NewRequest("POST", apiURL+"/api/v1/uptime/monitors/"+monitorID+"/status", bytes.NewBuffer(payload))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-Token", token)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
@@ -194,7 +195,7 @@ func startMonitorChecker(apiURL, token string) {
 			}
 
 			result := runMonitorCheck(m)
-			if err := submitMonitorResult(apiURL, m.ID, result); err != nil {
+			if err := submitMonitorResult(apiURL, m.ID, token, result); err != nil {
 				fmt.Printf("[agent] failed to submit result for monitor %s: %v\n", m.ID, err)
 			} else {
 				fmt.Printf("[agent] monitor %s -> %s (%dms)\n", m.ID, result.Status, result.Latency)
