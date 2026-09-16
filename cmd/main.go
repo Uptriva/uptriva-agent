@@ -77,20 +77,30 @@ func signPayload(payload []byte, apiKey string) string {
 }
 
 type MetricsPayload struct {
-	CPUUsage  float64 `json:"cpu_usage"`
-	RAMUsage  float64 `json:"ram_usage"`
-	DiskUsage float64 `json:"disk_usage"`
-	NetIn     int64   `json:"net_in"`
-	NetOut    int64   `json:"net_out"`
-	Processes string  `json:"processes"`
-	Interval  int     `json:"interval"`
-	Version   string  `json:"version"`
+	CPUUsage    float64 `json:"cpu_usage"`
+	CPUCores    int     `json:"cpu_cores"`
+	RAMUsage    float64 `json:"ram_usage"`
+	DiskUsage   float64 `json:"disk_usage"`
+	NetIn       int64   `json:"net_in"`
+	NetOut      int64   `json:"net_out"`
+	Processes   string  `json:"processes"`
+	Interval    int     `json:"interval"`
+	Version     string  `json:"version"`
+	Load1       float64 `json:"load_1"`
+	Load5       float64 `json:"load_5"`
+	Load15      float64 `json:"load_15"`
+	UptimeSecs  uint64  `json:"uptime_secs"`
+	MemoryJSON  string  `json:"memory_detail"`
+	DisksJSON   string  `json:"disks_detail"`
+	SystemdJSON string  `json:"systemd_units"`
+	FailedUnits string  `json:"failed_units"`
 }
 
 func collectMetrics() (MetricsPayload, error) {
 	var payload MetricsPayload
 
 	payload.CPUUsage = getCPUUsage()
+	payload.CPUCores = getCPUCoreCount()
 	payload.RAMUsage = getRAMUsage()
 	payload.DiskUsage = getDiskUsage()
 
@@ -114,6 +124,35 @@ func collectMetrics() (MetricsPayload, error) {
 	prevNetTs = now
 
 	payload.Processes = getRunningProcesses()
+
+	payload.Load1, payload.Load5, payload.Load15 = getLoadAverages()
+	payload.UptimeSecs = getUptime()
+
+	memDetail := getMemoryDetail()
+	if b, err := json.Marshal(memDetail); err == nil {
+		payload.MemoryJSON = string(b)
+	}
+
+	diskDetails := getDiskDetails()
+	if b, err := json.Marshal(diskDetails); err == nil {
+		payload.DisksJSON = string(b)
+	}
+
+	systemdUnits := getSystemdUnits()
+	if systemdUnits != nil {
+		if b, err := json.Marshal(systemdUnits); err == nil {
+			payload.SystemdJSON = string(b)
+		}
+	}
+
+	failedUnits := getFailedSystemdUnits()
+	if len(failedUnits) > 0 {
+		if b, err := json.Marshal(failedUnits); err == nil {
+			payload.FailedUnits = string(b)
+		}
+	} else {
+		payload.FailedUnits = "[]"
+	}
 
 	return payload, nil
 }
