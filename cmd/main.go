@@ -14,13 +14,16 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 var AgentVersion = "dev"
 
 var (
+	prevNetMu  sync.Mutex
 	prevNetIn  int64
 	prevNetOut int64
 	prevNetTs  time.Time
@@ -106,6 +109,7 @@ func collectMetrics() (MetricsPayload, error) {
 
 	now := time.Now()
 	curIn, curOut := getNetworkBytes()
+	prevNetMu.Lock()
 	if !prevNetTs.IsZero() {
 		elapsed := now.Sub(prevNetTs).Seconds()
 		if elapsed > 0 {
@@ -122,6 +126,7 @@ func collectMetrics() (MetricsPayload, error) {
 	prevNetIn = curIn
 	prevNetOut = curOut
 	prevNetTs = now
+	prevNetMu.Unlock()
 
 	payload.Processes = getRunningProcesses()
 
@@ -276,6 +281,8 @@ func fetchManifest(downloadURL string, betaChannel bool) (*AgentManifest, error)
 }
 
 func compareVersions(a, b string) int {
+	a = strings.TrimPrefix(strings.TrimSpace(a), "v")
+	b = strings.TrimPrefix(strings.TrimSpace(b), "v")
 	aParts := strings.Split(a, ".")
 	bParts := strings.Split(b, ".")
 	maxLen := len(aParts)
@@ -420,8 +427,51 @@ func downloadAndInstallUpdate(manifest *AgentManifest) error {
 		return fmt.Errorf("failed to replace binary: %w", err)
 	}
 
-	os.Remove(backupPath)
+	markerPath := binPath + ".update-pending"
+	if err := os.WriteFile(markerPath, []byte("0"), 0644); err != nil {
+		os.Rename(binPath, tmpPath)
+		os.Rename(backupPath, binPath)
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to write update marker, rolled back: %w", err)
+	}
+
 	return nil
+}
+
+func checkPendingUpdate() {
+	binPath := getCurrentBinaryPath()
+	markerPath := binPath + ".update-pending"
+
+	data, err := os.ReadFile(markerPath)
+	if err != nil {
+		return
+	}
+
+	attempts, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+
+	if attempts >= 3 {
+		backupPath := binPath + ".bak"
+		if _, err := os.Stat(backupPath); err == nil {
+			if err := os.Rename(backupPath, binPath); err == nil {
+				os.Remove(markerPath)
+				fmt.Println("[update] rollback: restored previous binary after repeated failed starts")
+				os.Exit(1)
+			}
+		}
+		return
+	}
+
+	_ = os.WriteFile(markerPath, []byte(strconv.Itoa(attempts+1)), 0644)
+}
+
+func confirmUpdate() {
+	binPath := getCurrentBinaryPath()
+	if _, err := os.Stat(binPath + ".update-pending"); err != nil {
+		return
+	}
+	os.Remove(binPath + ".update-pending")
+	os.Remove(binPath + ".bak")
+	fmt.Println("[update] update confirmed healthy, previous version removed")
 }
 
 func performUpdate(config *Config) bool {
@@ -552,6 +602,8 @@ func main() {
 		os.Exit(0)
 	}
 
+	checkPendingUpdate()
+
 	var config Config
 
 	if *tokenFlag != "" {
@@ -667,21 +719,28 @@ func main() {
 			if err != nil {
 				continue
 			}
-			req, err := http.NewRequest("POST", config.APIURL+"/api/v1/uptime/agents/metrics", bytes.NewBuffer(b))
-			if err != nil {
-				continue
-			}
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("X-Agent-Token", config.Token)
-			client := &http.Client{
-				Timeout: 5 * time.Second,
-				Transport: &http.Transport{
-					TLSClientConfig: &tls.Config{
-						MinVersion: tls.VersionTLS12,
+			sendMetrics := func() (*http.Response, error) {
+				req, err := http.NewRequest("POST", config.APIURL+"/api/v1/uptime/agents/metrics", bytes.NewBuffer(b))
+				if err != nil {
+					return nil, err
+				}
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("X-Agent-Token", config.Token)
+				client := &http.Client{
+					Timeout: 5 * time.Second,
+					Transport: &http.Transport{
+						TLSClientConfig: &tls.Config{
+							MinVersion: tls.VersionTLS12,
+						},
 					},
-				},
+				}
+				return client.Do(req)
 			}
-			resp, err := client.Do(req)
+			resp, err := sendMetrics()
+			if err != nil {
+				time.Sleep(10 * time.Second)
+				resp, err = sendMetrics()
+			}
 			if err != nil {
 				fmt.Printf("[agent] failed to send metrics: %v\n", err)
 				continue
@@ -689,6 +748,7 @@ func main() {
 			resp.Body.Close()
 			if resp.StatusCode == 204 {
 				fmt.Printf("[agent] metrics sent successfully (%s)\n", time.Now().Format("15:04:05"))
+				confirmUpdate()
 			} else {
 				fmt.Printf("[agent] metrics endpoint returned %d\n", resp.StatusCode)
 			}

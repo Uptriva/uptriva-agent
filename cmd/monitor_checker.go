@@ -6,9 +6,11 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -21,6 +23,7 @@ type AssignedMonitor struct {
 	ExpectedStatus     *int    `json:"expected_status"`
 	ExpectedBody       *string `json:"expected_body"`
 	LatencyThresholdMs *int    `json:"latency_threshold_ms"`
+	VerifySSL          *bool   `json:"verify_ssl"`
 }
 
 type MonitorCheckResult struct {
@@ -56,12 +59,12 @@ func fetchAssignedMonitors(apiURL, token string) ([]AssignedMonitor, error) {
 	return data.Monitors, nil
 }
 
-func checkHTTP(target string, expectedStatus *int, expectedBody *string) (string, int, string) {
+func checkHTTP(target string, expectedStatus *int, expectedBody *string, verifySSL bool) (string, int, string) {
 	start := time.Now()
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: !verifySSL},
 		},
 	}
 	resp, err := client.Get(target)
@@ -76,10 +79,11 @@ func checkHTTP(target string, expectedStatus *int, expectedBody *string) (string
 	}
 
 	if expectedBody != nil {
-		buf := new(bytes.Buffer)
-		buf.ReadFrom(resp.Body)
-		body := buf.String()
-		if !strings.Contains(body, *expectedBody) {
+		bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if err != nil {
+			return "down", latency, "failed to read response body"
+		}
+		if !strings.Contains(string(bodyBytes), *expectedBody) {
 			return "down", latency, "response body mismatch"
 		}
 	}
@@ -103,7 +107,15 @@ func checkPing(target string) (string, int, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ping", "-c", "1", "-W", "5", target)
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.CommandContext(ctx, "ping", "-n", "1", "-w", "5000", target)
+	case "darwin":
+		cmd = exec.CommandContext(ctx, "ping", "-c", "1", "-W", "5000", target)
+	default:
+		cmd = exec.CommandContext(ctx, "ping", "-c", "1", "-W", "5", target)
+	}
 	if _, err := cmd.Output(); err != nil {
 		latency := int(time.Since(start).Milliseconds())
 		return "down", latency, "ping failed"
@@ -139,7 +151,11 @@ func checkDNS(target string) (string, int, string) {
 func runMonitorCheck(monitor AssignedMonitor) MonitorCheckResult {
 	switch monitor.Type {
 	case "http", "https":
-		status, latency, msg := checkHTTP(monitor.Target, monitor.ExpectedStatus, monitor.ExpectedBody)
+		verifySSL := true
+		if monitor.VerifySSL != nil {
+			verifySSL = *monitor.VerifySSL
+		}
+		status, latency, msg := checkHTTP(monitor.Target, monitor.ExpectedStatus, monitor.ExpectedBody, verifySSL)
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}
 	case "tcp":
 		status, latency, msg := checkTCP(monitor.Target)
@@ -151,7 +167,7 @@ func runMonitorCheck(monitor AssignedMonitor) MonitorCheckResult {
 		status, latency, msg := checkDNS(monitor.Target)
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}
 	default:
-		return MonitorCheckResult{Status: "down", Latency: 0, Message: "unsupported check type: " + monitor.Type}
+		return MonitorCheckResult{Status: "unknown", Latency: 0, Message: "unsupported check type: " + monitor.Type}
 	}
 }
 
@@ -197,10 +213,11 @@ func startMonitorChecker(apiURL, token string) {
 			result := runMonitorCheck(m)
 			if err := submitMonitorResult(apiURL, m.ID, token, result); err != nil {
 				fmt.Printf("[agent] failed to submit result for monitor %s: %v\n", m.ID, err)
+				lastCheck[m.ID] = time.Now().Add(-interval + 30*time.Second)
 			} else {
 				fmt.Printf("[agent] monitor %s -> %s (%dms)\n", m.ID, result.Status, result.Latency)
+				lastCheck[m.ID] = time.Now()
 			}
-			lastCheck[m.ID] = time.Now()
 		}
 
 		time.Sleep(10 * time.Second)
