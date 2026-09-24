@@ -1,3 +1,26 @@
+## v1.3.4
+
+- Game server monitor checks can now run on agents, including private and internal targets
+- Supported query methods: A2S/Source Engine query (Rust, CS2, ARK, Valheim, custom), Minecraft status protocol, FiveM dynamic.json, generic REST endpoints, and TCP connect
+- Check messages include live player counts (e.g. "12/40 players on de_dust2")
+
+## v1.3.3
+
+- No functional changes; rebuild/re-release
+
+## v1.3.2
+
+- New agent-executed monitor types: UDP port checks, SSL certificate expiry, domain expiry, Redis, SMTP STARTTLS
+- Redis checks support password authentication and optional PING verification via monitor settings
+
+## v1.3.1
+
+- Self-update hardening: previous binary is kept as .bak and automatically restored if the new binary fails to report healthy metrics within 3 restarts
+- Version comparison handles v-prefixed version strings correctly
+- Fixed race condition in network rate counters between collectors and the local metrics handler
+- Agent-executed HTTP checks honor the monitor verify_ssl setting and cap response body reads
+- Metrics submission retries once after 10 seconds on transport errors
+
 ## v1.3.0
 
 - Systemd unit monitoring: collects all service units and reports failed units
