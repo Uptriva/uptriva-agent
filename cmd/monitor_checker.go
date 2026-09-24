@@ -387,6 +387,9 @@ func runMonitorCheck(monitor AssignedMonitor) (MonitorCheckResult, bool) {
 	case "redis":
 		status, latency, msg := checkRedis(monitor.Target, monitor.Settings)
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "game_server":
+		status, latency, msg := checkGameServer(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
 	default:
 		return MonitorCheckResult{}, false
 	}
