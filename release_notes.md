@@ -1,3 +1,8 @@
+## v1.3.9
+
+- Remote command channel: agents poll `/agents/commands` every 15s and execute queued actions from event rules — `restart_service` (systemd/launchd/Windows Service), `exec_script` (120s timeout, output captured to result), `collect_diagnostics` (returns current metrics snapshot)
+- Command results are acked back to the API and emitted as `agent.command_completed`/`agent.command_failed` events, so rules can react to command outcomes
+
 ## v1.3.8
 
 - Fixed macOS fallback collectors not resolving `top`/`netstat` under launchd's minimal PATH (absolute paths now used)

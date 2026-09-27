@@ -707,8 +707,13 @@ func main() {
 	metricTicker := time.NewTicker(time.Duration(config.Interval) * time.Second)
 	defer metricTicker.Stop()
 
+	commandTicker := time.NewTicker(commandPollInterval)
+	defer commandTicker.Stop()
+
 	for {
 		select {
+		case <-commandTicker.C:
+			pollAgentCommands(config.APIURL, config.Token)
 		case <-updateCh:
 			if autoUpdate && performUpdate(&config) {
 				os.Exit(0)
