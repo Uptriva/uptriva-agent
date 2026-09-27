@@ -1,3 +1,9 @@
+## v1.3.7
+
+- macOS (darwin) support: LaunchAgent-based service install, user-level paths, no systemd dependency
+- Fixed CPU and network metrics reporting 0 on macOS: native `top`/`netstat` fallbacks when gopsutil collectors are unavailable in CGO-disabled builds
+- Metric collector failures are now logged once instead of silently returning zero
+
 ## v1.3.4
 
 - Game server monitor checks can now run on agents, including private and internal targets
