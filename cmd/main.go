@@ -39,15 +39,16 @@ const (
 )
 
 type Config struct {
-	APIURL                    string `json:"api_url"`
-	Token                     string `json:"token"`
-	AgentID                   string `json:"agent_id"`
-	Interval                  int    `json:"interval"`
-	Port                      int    `json:"port"`
-	AutoUpdateEnabled         bool   `json:"auto_update_enabled"`
-	AutoUpdateIntervalMinutes int    `json:"auto_update_interval_minutes"`
-	AcceptedPrivacyPolicy     string `json:"accepted_privacy_policy"`
-	BetaChannel               bool   `json:"beta_channel"`
+	APIURL                    string   `json:"api_url"`
+	Token                     string   `json:"token"`
+	AgentID                   string   `json:"agent_id"`
+	Interval                  int      `json:"interval"`
+	Port                      int      `json:"port"`
+	AutoUpdateEnabled         bool     `json:"auto_update_enabled"`
+	AutoUpdateIntervalMinutes int      `json:"auto_update_interval_minutes"`
+	AcceptedPrivacyPolicy     string   `json:"accepted_privacy_policy"`
+	BetaChannel               bool     `json:"beta_channel"`
+	WatchServices             []string `json:"watch_services"`
 }
 
 func saveConfig(config Config) error {
@@ -759,6 +760,9 @@ func main() {
 				confirmUpdate()
 			} else {
 				fmt.Printf("[agent] metrics endpoint returned %d\n", resp.StatusCode)
+			}
+			if events := collectAgentEvents(config); len(events) > 0 {
+				sendAgentEvents(config, events)
 			}
 		}
 	}
