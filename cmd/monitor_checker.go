@@ -104,6 +104,16 @@ func checkTCP(target string) (string, int, string) {
 	return "up", latency, ""
 }
 
+func tcpConnectLatency(addr string) int {
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		return -1
+	}
+	conn.Close()
+	return int(time.Since(start).Milliseconds())
+}
+
 func checkPing(target string) (string, int, string) {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

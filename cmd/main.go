@@ -97,9 +97,10 @@ type MetricsPayload struct {
 	DisksJSON   string  `json:"disks_detail"`
 	SystemdJSON string  `json:"systemd_units"`
 	FailedUnits string  `json:"failed_units"`
+	SelfPingMs  int     `json:"self_ping_ms"`
 }
 
-func collectMetrics() (MetricsPayload, error) {
+func collectMetrics(apiURL string) (MetricsPayload, error) {
 	var payload MetricsPayload
 
 	payload.CPUUsage = getCPUUsage()
@@ -159,11 +160,13 @@ func collectMetrics() (MetricsPayload, error) {
 		payload.FailedUnits = "[]"
 	}
 
+	payload.SelfPingMs = measureSelfPing(apiURL)
+
 	return payload, nil
 }
 
-func collectMetricsWithInterval(interval int) (MetricsPayload, error) {
-	p, err := collectMetrics()
+func collectMetricsWithInterval(apiURL string, interval int) (MetricsPayload, error) {
+	p, err := collectMetrics(apiURL)
 	if err != nil {
 		return p, err
 	}
@@ -677,7 +680,7 @@ func main() {
 				}
 			}
 			http.HandleFunc("/metrics", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-				payload, err := collectMetrics()
+				payload, err := collectMetrics(config.APIURL)
 				if err != nil {
 					http.Error(w, err.Error(), 500)
 					return
@@ -711,7 +714,7 @@ func main() {
 				os.Exit(0)
 			}
 		case <-metricTicker.C:
-			payload, err := collectMetricsWithInterval(config.Interval)
+			payload, err := collectMetricsWithInterval(config.APIURL, config.Interval)
 			if err != nil {
 				continue
 			}

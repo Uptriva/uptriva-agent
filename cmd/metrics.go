@@ -218,3 +218,25 @@ func getFailedSystemdUnits() []string {
 	}
 	return failed
 }
+
+func measureSelfPing(apiURL string) int {
+	host := apiURL
+	host = strings.TrimPrefix(host, "https://")
+	host = strings.TrimPrefix(host, "http://")
+	if idx := strings.Index(host, "/"); idx >= 0 {
+		host = host[:idx]
+	}
+	if idx := strings.Index(host, ":"); idx >= 0 {
+		host = host[:idx]
+	}
+	if host == "" {
+		return -1
+	}
+
+	status, latency, _ := checkPing(host)
+	if status == "up" && latency >= 0 {
+		return latency
+	}
+
+	return tcpConnectLatency(host + ":443")
+}
