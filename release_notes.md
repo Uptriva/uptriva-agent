@@ -1,7 +1,12 @@
+## v1.3.8
+
+- Fixed macOS fallback collectors not resolving `top`/`netstat` under launchd's minimal PATH (absolute paths now used)
+- Fixed CPU idle parsing of `top` output (trailing space broke `%` stripping)
+
 ## v1.3.7
 
 - macOS (darwin) support: LaunchAgent-based service install, user-level paths, no systemd dependency
-- Fixed CPU and network metrics reporting 0 on macOS: native `top`/`netstat` fallbacks when gopsutil collectors are unavailable in CGO-disabled builds
+- Fixed CPU and network metrics reporting 0 on macOS: native `/usr/bin/top`/`/usr/sbin/netstat` fallbacks when gopsutil collectors are unavailable in CGO-disabled builds
 - Metric collector failures are now logged once instead of silently returning zero
 
 ## v1.3.4

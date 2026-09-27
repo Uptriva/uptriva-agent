@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -38,7 +39,7 @@ func getCPUUsage() float64 {
 	}
 	if !cpuFallbackLogged {
 		cpuFallbackLogged = true
-		log.Printf("[metrics] CPU collection failed on %s: err=%v", runtime.GOOS, err)
+		log.Printf("[metrics] CPU collection failed on %s (gopsutil err=%v, darwin top fallback failed)", runtime.GOOS, err)
 	}
 	return 0.0
 }
@@ -46,7 +47,11 @@ func getCPUUsage() float64 {
 func getCPUUsageDarwin() (float64, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "top", "-l", "2", "-n", "0", "-s", "1").Output()
+	topBin := "/usr/bin/top"
+	if _, statErr := os.Stat(topBin); statErr != nil {
+		topBin = "top"
+	}
+	out, err := exec.CommandContext(ctx, topBin, "-l", "2", "-n", "0", "-s", "1").Output()
 	if err != nil {
 		return 0, false
 	}
@@ -64,7 +69,9 @@ func getCPUUsageDarwin() (float64, bool) {
 		if !strings.HasSuffix(field, "idle") {
 			continue
 		}
-		idle, perr := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(field, "idle"), "%")), 64)
+		numStr := strings.TrimSpace(strings.TrimSuffix(field, "idle"))
+		numStr = strings.TrimSpace(strings.TrimSuffix(numStr, "%"))
+		idle, perr := strconv.ParseFloat(numStr, 64)
 		if perr != nil {
 			return 0, false
 		}
@@ -200,7 +207,11 @@ func getNetworkBytes() (int64, int64) {
 func getNetworkBytesDarwin() (int64, int64, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "netstat", "-ibn").Output()
+	netstatBin := "/usr/sbin/netstat"
+	if _, statErr := os.Stat(netstatBin); statErr != nil {
+		netstatBin = "netstat"
+	}
+	out, err := exec.CommandContext(ctx, netstatBin, "-ibn").Output()
 	if err != nil {
 		return 0, 0, false
 	}
