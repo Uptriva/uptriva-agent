@@ -49,6 +49,17 @@ type Config struct {
 	AcceptedPrivacyPolicy     string   `json:"accepted_privacy_policy"`
 	BetaChannel               bool     `json:"beta_channel"`
 	WatchServices             []string `json:"watch_services"`
+	SecurityEventsEnabled     bool     `json:"security_events_enabled"`
+	PackageMonitoringEnabled  bool     `json:"package_monitoring_enabled"`
+	DisableRemoteCommands     bool     `json:"disable_remote_commands"`
+}
+
+func envFlagEnabled(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 func saveConfig(config Config) error {
@@ -518,7 +529,16 @@ func main() {
 	checkUpdateFlag := flag.Bool("check-update", false, "")
 	acceptPrivacyFlag := flag.Bool("accept-privacy-policy", false, "")
 	betaFlag := flag.Bool("beta", false, "")
+	securityEventsFlag := flag.Bool("security-events", false, "")
+	noSecurityEventsFlag := flag.Bool("no-security-events", false, "")
+	pkgMonitoringFlag := flag.Bool("package-monitoring", false, "")
+	noPkgMonitoringFlag := flag.Bool("no-package-monitoring", false, "")
+	disableCommandsFlag := flag.Bool("no-remote-commands", false, "")
 	flag.Parse()
+
+	if *tokenFlag == "" {
+		*tokenFlag = strings.TrimSpace(os.Getenv("AGENT_TOKEN"))
+	}
 
 	if *versionFlag {
 		fmt.Println(AgentVersion)
@@ -626,6 +646,8 @@ func main() {
 		if *betaFlag {
 			config.BetaChannel = true
 		}
+		config.SecurityEventsEnabled = *securityEventsFlag
+		config.PackageMonitoringEnabled = *pkgMonitoringFlag
 
 		if err := saveConfig(config); err != nil {
 			fmt.Printf("Error saving config: %v\n", err)
@@ -640,6 +662,28 @@ func main() {
 			os.Exit(1)
 		}
 		config = cfg
+		if *securityEventsFlag || *noSecurityEventsFlag || *pkgMonitoringFlag || *noPkgMonitoringFlag || *disableCommandsFlag {
+			if *securityEventsFlag {
+				config.SecurityEventsEnabled = true
+			}
+			if *noSecurityEventsFlag {
+				config.SecurityEventsEnabled = false
+			}
+			if *pkgMonitoringFlag {
+				config.PackageMonitoringEnabled = true
+			}
+			if *noPkgMonitoringFlag {
+				config.PackageMonitoringEnabled = false
+			}
+			if *disableCommandsFlag {
+				config.DisableRemoteCommands = true
+			}
+			if err := saveConfig(config); err != nil {
+				fmt.Printf("Error saving config: %v\n", err)
+			}
+			fmt.Printf("[agent] addons: security-events=%v package-monitoring=%v remote-commands=%v\n",
+				config.SecurityEventsEnabled, config.PackageMonitoringEnabled, !config.DisableRemoteCommands)
+		}
 	}
 
 	if config.Interval < MinInterval {
@@ -714,6 +758,9 @@ func main() {
 	for {
 		select {
 		case <-commandTicker.C:
+			if config.DisableRemoteCommands || envFlagEnabled("AGENT_DISABLE_COMMANDS") {
+				continue
+			}
 			pollAgentCommands(config.APIURL, config.Token)
 		case <-updateCh:
 			if autoUpdate && performUpdate(&config) {

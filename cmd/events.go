@@ -141,6 +141,13 @@ func collectAgentEvents(cfg Config) []agentEventItem {
 	prevInterfaceUp = ifUp
 
 	eventStateReady = true
+
+	if cfg.SecurityEventsEnabled || envFlagEnabled("AGENT_SECURITY_EVENTS") {
+		events = append(events, collectSecurityEvents()...)
+	}
+	if cfg.PackageMonitoringEnabled || envFlagEnabled("AGENT_PKG_MONITORING") {
+		events = append(events, collectPackageEvents()...)
+	}
 	return events
 }
 

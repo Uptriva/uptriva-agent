@@ -1,3 +1,13 @@
+## v1.4.1
+
+- Security event detection on Linux (opt-in add-on): failed SSH/sudo authentications are collected from the systemd journal and emitted as `agent.auth_failed` events (up to 20 per batch, deduplicated server-side)
+- Package update monitoring (opt-in add-on): pending system package updates are probed every 30 minutes (apt, dnf, yum, pacman-contrib `checkupdates`) and emitted as `agent.pkg_updates_available`/`agent.pkg_updates_cleared` events with update and security-update counts
+- Both add-ons are off by default; enable via `--security-events` / `--package-monitoring`, `AGENT_SECURITY_EVENTS` / `AGENT_PKG_MONITORING`, or the `security_events_enabled` / `package_monitoring_enabled` config fields
+- New command types for scheduled tasks and rules: `update_packages` (apt-get/dnf/yum/pacman/apk upgrade, brew, winget — 15-minute timeout, forces a fresh update probe afterwards) and `reboot_host` (acknowledged to the API before the machine goes down)
+- New hardening switch `--no-remote-commands` / `disable_remote_commands` disables the remote command channel entirely
+- Hardening: service names passed to `restart_service` are validated against a strict charset (closes PowerShell/flag injection), ping/whois check targets can no longer inject CLI flags, and `AGENT_TOKEN` can be used instead of `--token` to keep the token out of the process list
+- No-op on non-Linux systems and on hosts without journalctl/package managers
+
 ## v1.3.9
 
 - Remote command channel: agents poll `/agents/commands` every 15s and execute queued actions from event rules — `restart_service` (systemd/launchd/Windows Service), `exec_script` (120s timeout, output captured to result), `collect_diagnostics` (returns current metrics snapshot)

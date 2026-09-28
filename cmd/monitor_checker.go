@@ -114,8 +114,25 @@ func tcpConnectLatency(addr string) int {
 	return int(time.Since(start).Milliseconds())
 }
 
+func validExecTarget(t string) bool {
+	if t == "" || strings.HasPrefix(t, "-") {
+		return false
+	}
+	for _, r := range t {
+		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == '.' || r == '-' || r == ':' || r == '_' || r == '[' || r == ']' || r == '%'
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func checkPing(target string) (string, int, string) {
 	start := time.Now()
+	if !validExecTarget(target) {
+		return "down", 0, "invalid ping target"
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -237,7 +254,7 @@ func checkSSLCert(target string) (string, int, string) {
 
 func checkDomain(target string) (string, int, string, bool) {
 	host := strings.ToLower(strings.TrimSpace(target))
-	if host == "" || strings.ContainsAny(host, " \t\r\n|;&`$(){}[]<>\"'\\") {
+	if host == "" || strings.HasPrefix(host, "-") || strings.ContainsAny(host, " \t\r\n|;&`$(){}[]<>\"'\\") {
 		return "", 0, "", false
 	}
 	if _, err := exec.LookPath("whois"); err != nil {

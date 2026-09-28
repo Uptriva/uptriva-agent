@@ -84,7 +84,11 @@ The agent stores configuration in `agent_config.json` in its working directory.
   "interval": 30,
   "port": 0,
   "auto_update_enabled": true,
-  "auto_update_interval_minutes": 30
+  "auto_update_interval_minutes": 30,
+  "watch_services": [],
+  "security_events_enabled": false,
+  "package_monitoring_enabled": false,
+  "disable_remote_commands": false
 }
 ```
 
@@ -92,6 +96,24 @@ The agent stores configuration in `agent_config.json` in its working directory.
 - `port` — optional local metrics endpoint on `http://127.0.0.1:{port}/metrics`
 - `auto_update_enabled` — enable/disable automatic self-updates
 - `auto_update_interval_minutes` — how often to check for updates
+- `watch_services` — process names to watch; exits/recoveries emit `agent.process_exit`/`agent.process_recovered` events
+- `security_events_enabled` — **add-on, default off** (Linux only): reports failed SSH/sudo authentications from the systemd journal as `agent.auth_failed` events. Requires the agent to have journal read access (root or `systemd-journal` group). Event messages include the raw log line, which may contain usernames and source IPs.
+- `package_monitoring_enabled` — **add-on, default off** (Linux only): probes pending package updates every 30 minutes via `apt`/`dnf`/`yum`/`checkupdates` and emits `agent.pkg_updates_available`/`agent.pkg_updates_cleared` events
+- `disable_remote_commands` — disables the remote command channel entirely (`restart_service`, `exec_script`, `collect_diagnostics` stay queued server-side but are never executed)
+
+Toggles can also be set via CLI flags (persisted to the config) or environment variables:
+
+```bash
+uptime-agent --security-events --package-monitoring   # enable
+uptime-agent --no-security-events                     # disable
+uptime-agent --no-remote-commands                     # disable remote exec
+```
+
+```bash
+AGENT_SECURITY_EVENTS=true AGENT_PKG_MONITORING=true uptime-agent
+```
+
+To avoid exposing the token in the process list, `AGENT_TOKEN` can be used instead of `--token`.
 
 After editing the config, restart the agent:
 
