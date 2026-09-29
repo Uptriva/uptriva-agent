@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/smtp"
+	"net/url"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -32,6 +33,52 @@ type MonitorCheckResult struct {
 	Status  string `json:"status"`
 	Latency int    `json:"latency"`
 	Message string `json:"message"`
+}
+
+var blockedTargetNets []*net.IPNet
+
+func init() {
+	for _, cidr := range []string{"169.254.0.0/16", "fe80::/10"} {
+		_, n, err := net.ParseCIDR(cidr)
+		if err == nil {
+			blockedTargetNets = append(blockedTargetNets, n)
+		}
+	}
+}
+
+func blockedTargetHost(target string) string {
+	host := target
+	if strings.Contains(target, "://") {
+		if u, err := url.Parse(target); err == nil && u.Host != "" {
+			host = u.Host
+		}
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return strings.Trim(host, "[]")
+}
+
+func isBlockedTarget(target string) bool {
+	host := blockedTargetHost(target)
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "metadata.google.internal") || strings.EqualFold(host, "metadata.goog") {
+		return true
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return false
+	}
+	for _, ip := range ips {
+		for _, n := range blockedTargetNets {
+			if n.Contains(ip) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func fetchAssignedMonitors(apiURL, token string) ([]AssignedMonitor, error) {
@@ -379,6 +426,10 @@ func checkSMTPStartTLS(target string) (string, int, string) {
 }
 
 func runMonitorCheck(monitor AssignedMonitor) (MonitorCheckResult, bool) {
+	if isBlockedTarget(monitor.Target) {
+		return MonitorCheckResult{Status: "down", Latency: 0, Message: "blocked target: link-local/cloud-metadata addresses are not allowed"}, true
+	}
+
 	switch monitor.Type {
 	case "http", "https":
 		verifySSL := true

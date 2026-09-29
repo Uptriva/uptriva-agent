@@ -432,6 +432,10 @@ func checkForUpdate(config Config) (*UpdateResult, error) {
 		return &UpdateResult{Updated: false}, nil
 	}
 
+	if manifest.MinAgentVersion != "" && compareVersions(AgentVersion, manifest.MinAgentVersion) < 0 {
+		return nil, fmt.Errorf("update %s requires agent >= %s (current %s)", manifest.Version, manifest.MinAgentVersion, AgentVersion)
+	}
+
 	if manifest.RequiresConsent && config.AcceptedPrivacyPolicy != manifest.PrivacyPolicyVersion {
 		return &UpdateResult{
 			Updated:              false,
@@ -536,7 +540,7 @@ func checkPendingUpdate() {
 
 	attempts, _ := strconv.Atoi(strings.TrimSpace(string(data)))
 
-	if attempts >= 3 {
+	if attempts >= 2 {
 		backupPath := binPath + ".bak"
 		if _, err := os.Stat(backupPath); err == nil {
 			if err := os.Rename(backupPath, binPath); err == nil {
@@ -569,6 +573,11 @@ func performUpdate(config *Config) bool {
 	}
 
 	if compareVersions(manifest.Version, AgentVersion) <= 0 {
+		return false
+	}
+
+	if manifest.MinAgentVersion != "" && compareVersions(AgentVersion, manifest.MinAgentVersion) < 0 {
+		fmt.Printf("[update] refusing update to %s: requires agent >= %s (current %s)\n", manifest.Version, manifest.MinAgentVersion, AgentVersion)
 		return false
 	}
 
