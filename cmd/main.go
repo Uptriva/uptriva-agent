@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,6 +54,19 @@ type Config struct {
 	SecurityEventsEnabled     bool     `json:"security_events_enabled"`
 	PackageMonitoringEnabled  bool     `json:"package_monitoring_enabled"`
 	DisableRemoteCommands     bool     `json:"disable_remote_commands"`
+	EnableRemoteCommands      bool     `json:"enable_remote_commands"`
+	AllowExecScript           bool     `json:"allow_exec_script"`
+}
+
+func remoteCommandsEnabled(c *Config) bool {
+	if c.DisableRemoteCommands || envFlagEnabled("AGENT_DISABLE_COMMANDS") {
+		return false
+	}
+	return c.EnableRemoteCommands || envFlagEnabled("AGENT_ENABLE_COMMANDS")
+}
+
+func execScriptAllowed(c *Config) bool {
+	return c.AllowExecScript || envFlagEnabled("AGENT_ALLOW_EXEC_SCRIPT")
 }
 
 func envFlagEnabled(name string) bool {
@@ -267,6 +282,60 @@ type AgentManifest struct {
 	ReleaseNotes         string                   `json:"release_notes"`
 	RequiresConsent      bool                     `json:"requires_consent"`
 	Platforms            map[string]PlatformAsset `json:"platforms"`
+	KeyID                string                   `json:"key_id,omitempty"`
+	Signature            string                   `json:"signature,omitempty"`
+}
+
+var releasePublicKeyHex = ""
+
+var releasePublicKey = func() ed25519.PublicKey {
+	hexKey := os.Getenv("AGENT_RELEASE_PUBKEY")
+	if hexKey == "" {
+		hexKey = releasePublicKeyHex
+	}
+	if hexKey == "" {
+		return nil
+	}
+	raw, err := hex.DecodeString(hexKey)
+	if err != nil || len(raw) != ed25519.PublicKeySize {
+		return nil
+	}
+	return ed25519.PublicKey(raw)
+}()
+
+func manifestSigningPayload(m *AgentManifest) []byte {
+	keys := make([]string, 0, len(m.Platforms))
+	for k := range m.Platforms {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString("v1\n" + m.Version + "\n" + m.MinAgentVersion + "\n" + m.PrivacyPolicyVersion + "\n")
+	for _, k := range keys {
+		a := m.Platforms[k]
+		b.WriteString(k + "|" + a.Checksum + "|" + a.URL + "\n")
+	}
+	return []byte(b.String())
+}
+
+func verifyManifestSignature(m *AgentManifest) error {
+	if len(releasePublicKey) == 0 {
+		if envFlagEnabled("AGENT_REQUIRE_SIGNED_RELEASES") {
+			return fmt.Errorf("release public key not configured but signed releases are required")
+		}
+		return nil
+	}
+	if m.Signature == "" {
+		return fmt.Errorf("manifest is unsigned but signature verification is enabled")
+	}
+	sig, err := hex.DecodeString(m.Signature)
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		return fmt.Errorf("manifest has an invalid signature")
+	}
+	if !ed25519.Verify(releasePublicKey, manifestSigningPayload(m), sig) {
+		return fmt.Errorf("manifest signature verification failed")
+	}
+	return nil
 }
 
 type PlatformAsset struct {
@@ -290,6 +359,9 @@ func fetchManifest(downloadURL string, betaChannel bool) (*AgentManifest, error)
 	}
 	var manifest AgentManifest
 	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
+		return nil, err
+	}
+	if err := verifyManifestSignature(&manifest); err != nil {
 		return nil, err
 	}
 	return &manifest, nil
@@ -534,6 +606,8 @@ func main() {
 	pkgMonitoringFlag := flag.Bool("package-monitoring", false, "")
 	noPkgMonitoringFlag := flag.Bool("no-package-monitoring", false, "")
 	disableCommandsFlag := flag.Bool("no-remote-commands", false, "")
+	enableCommandsFlag := flag.Bool("remote-commands", false, "")
+	allowExecFlag := flag.Bool("allow-exec-script", false, "")
 	flag.Parse()
 
 	if *tokenFlag == "" {
@@ -662,7 +736,7 @@ func main() {
 			os.Exit(1)
 		}
 		config = cfg
-		if *securityEventsFlag || *noSecurityEventsFlag || *pkgMonitoringFlag || *noPkgMonitoringFlag || *disableCommandsFlag {
+		if *securityEventsFlag || *noSecurityEventsFlag || *pkgMonitoringFlag || *noPkgMonitoringFlag || *disableCommandsFlag || *enableCommandsFlag || *allowExecFlag {
 			if *securityEventsFlag {
 				config.SecurityEventsEnabled = true
 			}
@@ -677,12 +751,20 @@ func main() {
 			}
 			if *disableCommandsFlag {
 				config.DisableRemoteCommands = true
+				config.EnableRemoteCommands = false
+			}
+			if *enableCommandsFlag {
+				config.EnableRemoteCommands = true
+				config.DisableRemoteCommands = false
+			}
+			if *allowExecFlag {
+				config.AllowExecScript = true
 			}
 			if err := saveConfig(config); err != nil {
 				fmt.Printf("Error saving config: %v\n", err)
 			}
-			fmt.Printf("[agent] addons: security-events=%v package-monitoring=%v remote-commands=%v\n",
-				config.SecurityEventsEnabled, config.PackageMonitoringEnabled, !config.DisableRemoteCommands)
+			fmt.Printf("[agent] addons: security-events=%v package-monitoring=%v remote-commands=%v exec-script=%v\n",
+				config.SecurityEventsEnabled, config.PackageMonitoringEnabled, remoteCommandsEnabled(&config), execScriptAllowed(&config))
 		}
 	}
 
@@ -758,10 +840,9 @@ func main() {
 	for {
 		select {
 		case <-commandTicker.C:
-			if config.DisableRemoteCommands || envFlagEnabled("AGENT_DISABLE_COMMANDS") {
-				continue
+			if remoteCommandsEnabled(&config) {
+				pollAgentCommands(config.APIURL, config.Token)
 			}
-			pollAgentCommands(config.APIURL, config.Token)
 		case <-updateCh:
 			if autoUpdate && performUpdate(&config) {
 				os.Exit(0)

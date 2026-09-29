@@ -78,6 +78,11 @@ func executeAgentCommand(apiURL, token string, cmd AgentCommandPoll) {
 	case "restart_service":
 		result = restartService(params["service"])
 	case "exec_script":
+		if !execScriptAllowed(&config) {
+			status = "failed"
+			result = "exec_script is disabled on this agent — set --allow-exec-script or AGENT_ALLOW_EXEC_SCRIPT=true"
+			break
+		}
 		result = runScript(params["script"])
 	case "collect_diagnostics":
 		result = collectDiagnostics(apiURL)
