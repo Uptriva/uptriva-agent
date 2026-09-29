@@ -27,7 +27,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir -p dist/linux/amd64 dist/linux/arm64 dist/windows/amd64 dist/darwin/amd64 dist/darwin/arm64
-          LDFLAGS="-s -w -X main.AgentVersion=${VERSION}"
+          LDFLAGS="-s -w -X main.releasePublicKeyHex=${{ secrets.AGENT_RELEASE_PUBKEY }} -X main.AgentVersion=${VERSION}"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/linux/amd64/uptime-agent ./cmd/
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/linux/arm64/uptime-agent ./cmd/
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/windows/amd64/uptime-agent.exe ./cmd/
