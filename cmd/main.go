@@ -841,7 +841,7 @@ func main() {
 		select {
 		case <-commandTicker.C:
 			if remoteCommandsEnabled(&config) {
-				pollAgentCommands(config.APIURL, config.Token)
+				pollAgentCommands(config.APIURL, config.Token, &config)
 			}
 		case <-updateCh:
 			if autoUpdate && performUpdate(&config) {

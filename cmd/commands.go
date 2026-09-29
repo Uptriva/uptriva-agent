@@ -33,7 +33,7 @@ func agentHTTPClient() *http.Client {
 	}
 }
 
-func pollAgentCommands(apiURL, token string) {
+func pollAgentCommands(apiURL, token string, cfg *Config) {
 	req, err := http.NewRequest("GET", apiURL+"/api/v1/uptime/agents/commands", nil)
 	if err != nil {
 		return
@@ -55,11 +55,11 @@ func pollAgentCommands(apiURL, token string) {
 	}
 	for _, cmd := range out.Commands {
 		cmd := cmd
-		go executeAgentCommand(apiURL, token, cmd)
+		go executeAgentCommand(apiURL, token, cmd, cfg)
 	}
 }
 
-func executeAgentCommand(apiURL, token string, cmd AgentCommandPoll) {
+func executeAgentCommand(apiURL, token string, cmd AgentCommandPoll, cfg *Config) {
 	var params map[string]string
 	if cmd.Params != "" {
 		_ = json.Unmarshal([]byte(cmd.Params), &params)
@@ -78,7 +78,7 @@ func executeAgentCommand(apiURL, token string, cmd AgentCommandPoll) {
 	case "restart_service":
 		result = restartService(params["service"])
 	case "exec_script":
-		if !execScriptAllowed(&config) {
+		if !execScriptAllowed(cfg) {
 			status = "failed"
 			result = "exec_script is disabled on this agent — set --allow-exec-script or AGENT_ALLOW_EXEC_SCRIPT=true"
 			break
