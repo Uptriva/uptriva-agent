@@ -310,10 +310,10 @@ func manifestSigningPayload(m *AgentManifest) []byte {
 	}
 	sort.Strings(keys)
 	var b strings.Builder
-	b.WriteString("v1\n" + m.Version + "\n" + m.MinAgentVersion + "\n" + m.PrivacyPolicyVersion + "\n")
+	fmt.Fprintf(&b, "v1\n%s\n%s\n%s\n", m.Version, m.MinAgentVersion, m.PrivacyPolicyVersion)
 	for _, k := range keys {
 		a := m.Platforms[k]
-		b.WriteString(k + "|" + a.Checksum + "|" + a.URL + "\n")
+		fmt.Fprintf(&b, "%s|%s|%s\n", k, a.Checksum, a.URL)
 	}
 	return []byte(b.String())
 }
