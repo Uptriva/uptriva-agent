@@ -505,9 +505,14 @@ func downloadAndInstallUpdate(manifest *AgentManifest) error {
 
 	binPath := getCurrentBinaryPath()
 	backupPath := binPath + ".bak"
+	backupSumPath := binPath + ".bak.sha256"
 
 	if _, err := os.Stat(binPath); err == nil {
+		os.Remove(backupSumPath)
 		os.Rename(binPath, backupPath)
+		if sum, serr := fileSHA256(backupPath); serr == nil {
+			os.WriteFile(backupSumPath, []byte(sum), 0644)
+		}
 	}
 
 	if err := os.Rename(tmpPath, binPath); err != nil {
@@ -521,12 +526,48 @@ func downloadAndInstallUpdate(manifest *AgentManifest) error {
 	markerPath := binPath + ".update-pending"
 	if err := os.WriteFile(markerPath, []byte("0"), 0644); err != nil {
 		os.Rename(binPath, tmpPath)
-		os.Rename(backupPath, binPath)
+		restoreVerifiedBackup(binPath)
 		os.Remove(tmpPath)
 		return fmt.Errorf("failed to write update marker, rolled back: %w", err)
 	}
 
 	return nil
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func restoreVerifiedBackup(binPath string) bool {
+	backupPath := binPath + ".bak"
+	sumPath := binPath + ".bak.sha256"
+	expected, err := os.ReadFile(sumPath)
+	if err != nil {
+		fmt.Println("[update] rollback: no checksum record, restoring legacy backup without verification")
+		if rerr := os.Rename(backupPath, binPath); rerr != nil {
+			return false
+		}
+		return true
+	}
+	actual, err := fileSHA256(backupPath)
+	if err != nil || actual != strings.TrimSpace(string(expected)) {
+		fmt.Println("[update] rollback refused: backup binary checksum mismatch")
+		return false
+	}
+	if err := os.Rename(backupPath, binPath); err != nil {
+		return false
+	}
+	os.Remove(sumPath)
+	return true
 }
 
 func checkPendingUpdate() {
@@ -543,11 +584,13 @@ func checkPendingUpdate() {
 	if attempts >= 2 {
 		backupPath := binPath + ".bak"
 		if _, err := os.Stat(backupPath); err == nil {
-			if err := os.Rename(backupPath, binPath); err == nil {
+			if restoreVerifiedBackup(binPath) {
 				os.Remove(markerPath)
-				fmt.Println("[update] rollback: restored previous binary after repeated failed starts")
+				fmt.Println("[update] rollback: restored verified previous binary after repeated failed starts")
 				os.Exit(1)
 			}
+			os.Remove(markerPath)
+			fmt.Println("[update] rollback: backup verification failed, staying on current binary")
 		}
 		return
 	}
@@ -562,6 +605,7 @@ func confirmUpdate() {
 	}
 	os.Remove(binPath + ".update-pending")
 	os.Remove(binPath + ".bak")
+	os.Remove(binPath + ".bak.sha256")
 	fmt.Println("[update] update confirmed healthy, previous version removed")
 }
 

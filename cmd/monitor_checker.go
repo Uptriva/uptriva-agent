@@ -38,7 +38,7 @@ type MonitorCheckResult struct {
 var blockedTargetNets []*net.IPNet
 
 func init() {
-	for _, cidr := range []string{"169.254.0.0/16", "fe80::/10"} {
+	for _, cidr := range []string{"169.254.0.0/16", "fe80::/10", "ff00::/8", "224.0.0.0/4"} {
 		_, n, err := net.ParseCIDR(cidr)
 		if err == nil {
 			blockedTargetNets = append(blockedTargetNets, n)
@@ -59,6 +59,21 @@ func blockedTargetHost(target string) string {
 	return strings.Trim(host, "[]")
 }
 
+func isBlockedIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	for _, n := range blockedTargetNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 func isBlockedTarget(target string) bool {
 	host := blockedTargetHost(target)
 	if host == "" {
@@ -72,13 +87,74 @@ func isBlockedTarget(target string) bool {
 		return false
 	}
 	for _, ip := range ips {
-		for _, n := range blockedTargetNets {
-			if n.Contains(ip) {
-				return true
-			}
+		if isBlockedIP(ip) {
+			return true
 		}
 	}
 	return false
+}
+
+func checkedDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(host, "metadata.google.internal") || strings.EqualFold(host, "metadata.goog") {
+		return nil, fmt.Errorf("blocked target host: %s", host)
+	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+		if isBlockedIP(ip) {
+			return nil, fmt.Errorf("blocked target IP: %s", host)
+		}
+		return dialer.DialContext(ctx, network, addr)
+	}
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no IPs found for host %s", host)
+	}
+	for _, ip := range ips {
+		if isBlockedIP(ip) {
+			return nil, fmt.Errorf("blocked resolved IP %s for host %s", ip.String(), host)
+		}
+	}
+	var lastErr error
+	for _, ip := range ips {
+		conn, derr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if derr == nil {
+			return conn, nil
+		}
+		lastErr = derr
+	}
+	return nil, lastErr
+}
+
+func checkedDialTimeout(network, addr string, timeout time.Duration) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return checkedDialContext(ctx, network, addr)
+}
+
+func checkedHTTPClient(timeout time.Duration, verifySSL bool) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: !verifySSL},
+			DialContext:     checkedDialContext,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			if isBlockedTarget(req.URL.String()) {
+				return fmt.Errorf("redirect target blocked")
+			}
+			return nil
+		},
+	}
 }
 
 func fetchAssignedMonitors(apiURL, token string) ([]AssignedMonitor, error) {
@@ -110,12 +186,7 @@ func fetchAssignedMonitors(apiURL, token string) ([]AssignedMonitor, error) {
 
 func checkHTTP(target string, expectedStatus *int, expectedBody *string, verifySSL bool) (string, int, string) {
 	start := time.Now()
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: !verifySSL},
-		},
-	}
+	client := checkedHTTPClient(30*time.Second, verifySSL)
 	resp, err := client.Get(target)
 	latency := int(time.Since(start).Milliseconds())
 	if err != nil {
@@ -142,7 +213,7 @@ func checkHTTP(target string, expectedStatus *int, expectedBody *string, verifyS
 
 func checkTCP(target string) (string, int, string) {
 	start := time.Now()
-	conn, err := net.DialTimeout("tcp", target, 10*time.Second)
+	conn, err := checkedDialTimeout("tcp", target, 10*time.Second)
 	latency := int(time.Since(start).Milliseconds())
 	if err != nil {
 		return "down", latency, err.Error()
@@ -179,6 +250,9 @@ func checkPing(target string) (string, int, string) {
 	start := time.Now()
 	if !validExecTarget(target) {
 		return "down", 0, "invalid ping target"
+	}
+	if isBlockedTarget(target) {
+		return "down", 0, "blocked target: link-local/cloud-metadata addresses are not allowed"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -229,6 +303,21 @@ func checkUDP(target string) (string, int, string) {
 	if _, _, err := net.SplitHostPort(target); err != nil {
 		return "down", 0, "invalid target format, expected host:port"
 	}
+	host, port, _ := net.SplitHostPort(target)
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip == nil {
+		ips, lerr := net.DefaultResolver.LookupIP(context.Background(), "ip", host)
+		if lerr != nil {
+			return "down", 0, lerr.Error()
+		}
+		for _, ip := range ips {
+			if isBlockedIP(ip) {
+				return "down", 0, "blocked target IP"
+			}
+		}
+		target = net.JoinHostPort(ips[0].String(), port)
+	} else if isBlockedIP(ip) {
+		return "down", 0, "blocked target IP"
+	}
 	conn, err := net.DialTimeout("udp", target, 3*time.Second)
 	if err != nil {
 		return "down", int(time.Since(start).Milliseconds()), err.Error()
@@ -267,7 +356,7 @@ func checkSSLCert(target string) (string, int, string) {
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		serverName = h
 	}
-	rawConn, err := net.DialTimeout("tcp", host, 10*time.Second)
+	rawConn, err := checkedDialTimeout("tcp", host, 10*time.Second)
 	if err != nil {
 		return "down", int(time.Since(start).Milliseconds()), err.Error()
 	}
@@ -347,12 +436,20 @@ func checkRedis(target string, settings json.RawMessage) (string, int, string) {
 		if h, _, serr := net.SplitHostPort(addr); serr == nil {
 			host = h
 		}
-		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", addr, &tls.Config{
+		rawConn, derr := checkedDialTimeout("tcp", addr, 5*time.Second)
+		if derr != nil {
+			return "down", int(time.Since(start).Milliseconds()), derr.Error()
+		}
+		conn = tls.Client(rawConn, &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			ServerName: host,
 		})
+		if herr := conn.(*tls.Conn).Handshake(); herr != nil {
+			rawConn.Close()
+			return "down", int(time.Since(start).Milliseconds()), herr.Error()
+		}
 	} else {
-		conn, err = net.DialTimeout("tcp", addr, 5*time.Second)
+		conn, err = checkedDialTimeout("tcp", addr, 5*time.Second)
 	}
 	if err != nil {
 		return "down", int(time.Since(start).Milliseconds()), err.Error()
@@ -399,7 +496,7 @@ func checkSMTPStartTLS(target string) (string, int, string) {
 	if h, _, err := net.SplitHostPort(target); err == nil {
 		hostOnly = h
 	}
-	conn, err := net.DialTimeout("tcp", target, 10*time.Second)
+	conn, err := checkedDialTimeout("tcp", target, 10*time.Second)
 	if err != nil {
 		return "down", int(time.Since(start).Milliseconds()), err.Error()
 	}
