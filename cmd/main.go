@@ -892,10 +892,28 @@ func main() {
 				continue
 			}
 			resp.Body.Close()
-			if resp.StatusCode == 204 {
+			switch resp.StatusCode {
+			case 204:
 				fmt.Printf("[agent] metrics sent successfully (%s)\n", time.Now().Format("15:04:05"))
 				confirmUpdate()
-			} else {
+			case 401, 403:
+				fmt.Printf("[agent] metrics rejected with %d — re-running handshake\n", resp.StatusCode)
+				if cfg, herr := performHandshake(config.Token); herr == nil {
+					config.AgentID = cfg.AgentID
+					fmt.Printf("[agent] handshake recovered, agent_id=%s\n", config.AgentID)
+				} else {
+					fmt.Printf("[agent] handshake failed: %v\n", herr)
+				}
+			case 429:
+				wait := 30 * time.Second
+				if ra := resp.Header.Get("Retry-After"); ra != "" {
+					if secs, perr := strconv.Atoi(ra); perr == nil && secs > 0 {
+						wait = time.Duration(secs) * time.Second
+					}
+				}
+				fmt.Printf("[agent] rate limited, backing off %s\n", wait)
+				time.Sleep(wait)
+			default:
 				fmt.Printf("[agent] metrics endpoint returned %d\n", resp.StatusCode)
 			}
 			if events := collectAgentEvents(config); len(events) > 0 {
