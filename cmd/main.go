@@ -400,9 +400,9 @@ func getPlatformKey() string {
 
 func getBinaryPath() string {
 	if runtime.GOOS == "windows" {
-		return "C:\\Program Files\\ShxrkSystems\\uptime-agent.exe"
+		return "C:\\Program Files\\ShxrkSystems\\shxrk-agent.exe"
 	}
-	return "/usr/local/bin/uptime-agent"
+	return "/usr/local/bin/shxrk-agent"
 }
 
 func getCurrentBinaryPath() string {
@@ -475,7 +475,7 @@ func downloadAndInstallUpdate(manifest *AgentManifest) error {
 
 	tmpPath := getCurrentBinaryPath() + ".new"
 	if runtime.GOOS == "windows" {
-		tmpPath = os.Getenv("TEMP") + "\\uptime-agent.new.exe"
+		tmpPath = os.Getenv("TEMP") + "\\shxrk-agent.new.exe"
 	}
 
 	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
@@ -584,7 +584,7 @@ func performUpdate(config *Config) bool {
 	if manifest.RequiresConsent && config.AcceptedPrivacyPolicy != manifest.PrivacyPolicyVersion {
 		fmt.Printf("[update] update to %s available but requires privacy policy consent (v%s)\n", manifest.Version, manifest.PrivacyPolicyVersion)
 		fmt.Printf("[update] review at %s\n", manifest.PrivacyPolicyURL)
-		fmt.Println("[update] run: uptime-agent -accept-privacy-policy to consent and update")
+		fmt.Println("[update] run: shxrk-agent -accept-privacy-policy to consent and update")
 		return false
 	}
 
@@ -647,7 +647,7 @@ func main() {
 		if result.RequiresConsent {
 			fmt.Printf("Update available: %s -> %s\n", AgentVersion, result.NewVersion)
 			fmt.Printf("Privacy policy changed (v%s). Review: %s\n", result.PrivacyPolicyVersion, result.PrivacyPolicyURL)
-			fmt.Println("Run: uptime-agent -accept-privacy-policy to consent and update")
+			fmt.Println("Run: shxrk-agent -accept-privacy-policy to consent and update")
 			os.Exit(0)
 		}
 		if result.NewVersion != "" {

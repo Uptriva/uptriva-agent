@@ -1,4 +1,4 @@
-# ShxrkSystems Uptime Agent
+# ShxrkSystems Monitoring Agent
 
 Open source monitoring agent for ShxrkSystems Uptime. Collects system metrics (CPU, RAM, Disk, Network) and sends them to the ShxrkSystems API.
 
@@ -24,21 +24,21 @@ This agent is open source for transparency. You can review the code to verify:
 ### Linux/macOS
 
 ```bash
-wget https://github.com/shxrksystems/uptime-agent/releases/latest/download/uptime-agent-linux-amd64
-chmod +x uptime-agent-linux-amd64
-sudo mv uptime-agent-linux-amd64 /usr/local/bin/uptime-agent
+wget https://download.shxrk.systems/agents/linux/amd64/shxrk-agent
+chmod +x shxrk-agent
+sudo mv shxrk-agent /usr/local/bin/shxrk-agent
 ```
 
 ### Windows
 
-Download the latest binary from [Releases](https://github.com/shxrksystems/uptime-agent/releases) and place it in your PATH.
+Download the latest binary from [Releases](https://github.com/shxrksystems/shxrk-agent/releases) and place it in your PATH.
 
 ## Usage
 
 ### First-time setup
 
 ```bash
-uptime-agent --token YOUR_TOKEN --api https://api.shxrk.systems
+shxrk-agent --token YOUR_TOKEN --api https://api.shxrk.systems
 ```
 
 The agent will perform a handshake with the API and store an encrypted configuration file.
@@ -46,7 +46,7 @@ The agent will perform a handshake with the API and store an encrypted configura
 ### Running
 
 ```bash
-uptime-agent
+shxrk-agent
 ```
 
 The agent will read the encrypted configuration and start sending metrics.
@@ -54,7 +54,7 @@ The agent will read the encrypted configuration and start sending metrics.
 ### Optional metrics endpoint
 
 ```bash
-uptime-agent --token YOUR_TOKEN --api https://api.shxrk.systems --port 8080
+shxrk-agent --token YOUR_TOKEN --api https://api.shxrk.systems --port 8080
 ```
 
 This starts a local metrics endpoint on `http://127.0.0.1:8080/metrics` (protected by API key).
@@ -66,12 +66,12 @@ The agent stores configuration in `agent_config.json` in its working directory.
 ### Linux / macOS (installed via setup script)
 
 - Config file: `/etc/shxrk/agent_config.json`
-- Binary: `/usr/local/bin/uptime-agent`
+- Binary: `/usr/local/bin/shxrk-agent`
 - Working directory: `/etc/shxrk`
 
 ### Windows
 
-- Default binary: `C:\Program Files\ShxrkSystems\uptime-agent.exe`
+- Default binary: `C:\Program Files\ShxrkSystems\shxrk-agent.exe`
 - Config file: `agent_config.json` in the working directory from which the agent is started
 
 ### Config fields
@@ -104,13 +104,13 @@ The agent stores configuration in `agent_config.json` in its working directory.
 Toggles can also be set via CLI flags (persisted to the config) or environment variables:
 
 ```bash
-uptime-agent --security-events --package-monitoring   # enable
-uptime-agent --no-security-events                     # disable
-uptime-agent --no-remote-commands                     # disable remote exec
+shxrk-agent --security-events --package-monitoring   # enable
+shxrk-agent --no-security-events                     # disable
+shxrk-agent --no-remote-commands                     # disable remote exec
 ```
 
 ```bash
-AGENT_SECURITY_EVENTS=true AGENT_PKG_MONITORING=true uptime-agent
+AGENT_SECURITY_EVENTS=true AGENT_PKG_MONITORING=true shxrk-agent
 ```
 
 To avoid exposing the token in the process list, `AGENT_TOKEN` can be used instead of `--token`.
@@ -118,7 +118,7 @@ To avoid exposing the token in the process list, `AGENT_TOKEN` can be used inste
 After editing the config, restart the agent:
 
 ```bash
-sudo systemctl restart uptime-agent
+sudo systemctl restart shxrk-agent
 ```
 
 ## Metrics Collected
@@ -133,7 +133,7 @@ sudo systemctl restart uptime-agent
 ## Building from source
 
 ```bash
-go build -o uptime-agent cmd/main.go
+go build -o shxrk-agent cmd/main.go
 ```
 
 ## License

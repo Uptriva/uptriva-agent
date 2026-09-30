@@ -28,11 +28,16 @@ jobs:
         run: |
           mkdir -p dist/linux/amd64 dist/linux/arm64 dist/windows/amd64 dist/darwin/amd64 dist/darwin/arm64
           LDFLAGS="-s -w -X main.releasePublicKeyHex=${{ secrets.AGENT_RELEASE_PUBKEY }} -X main.AgentVersion=${VERSION}"
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/linux/amd64/uptime-agent ./cmd/
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/linux/arm64/uptime-agent ./cmd/
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/windows/amd64/uptime-agent.exe ./cmd/
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/darwin/amd64/uptime-agent ./cmd/
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/darwin/arm64/uptime-agent ./cmd/
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/linux/amd64/shxrk-agent ./cmd/
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/linux/arm64/shxrk-agent ./cmd/
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/windows/amd64/shxrk-agent.exe ./cmd/
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/darwin/amd64/shxrk-agent ./cmd/
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/darwin/arm64/shxrk-agent ./cmd/
+          cp dist/linux/amd64/shxrk-agent dist/linux/amd64/uptime-agent
+          cp dist/linux/arm64/shxrk-agent dist/linux/arm64/uptime-agent
+          cp dist/windows/amd64/shxrk-agent.exe dist/windows/amd64/uptime-agent.exe
+          cp dist/darwin/amd64/shxrk-agent dist/darwin/amd64/uptime-agent
+          cp dist/darwin/arm64/shxrk-agent dist/darwin/arm64/uptime-agent
 
       - name: Generate Checksums and Metadata
         env:

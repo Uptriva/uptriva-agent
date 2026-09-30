@@ -4,6 +4,7 @@
 *.so
 *.dylib
 uptime-agent
+shxrk-agent
 
 *.test
 
