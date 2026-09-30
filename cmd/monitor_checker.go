@@ -522,6 +522,195 @@ func checkSMTPStartTLS(target string) (string, int, string) {
 	return "up", int(time.Since(start).Milliseconds()), "STARTTLS successful"
 }
 
+type infraSettings struct {
+	ExpectedState      string `json:"expected_state"`
+	Path               string `json:"path"`
+	Token              string `json:"token"`
+	InsecureSkipVerify bool   `json:"insecure_skip_verify"`
+	ExpectSubstring    string `json:"expect_substring"`
+	TCPPorts           string `json:"tcp_ports"`
+	Service            string `json:"service"`
+	MinReplicas        int    `json:"min_replicas"`
+}
+
+func checkContainerRuntime(binary, target string, settings json.RawMessage) (string, int, string) {
+	if !validExecTarget(target) {
+		return "down", 0, "invalid container name"
+	}
+	var s infraSettings
+	json.Unmarshal(settings, &s)
+	expected := s.ExpectedState
+	if expected == "" {
+		expected = "running"
+	}
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, binary, "inspect", "-f", "{{.State.Status}}|{{.State.RestartCount}}", target).CombinedOutput()
+	latency := int(time.Since(start).Milliseconds())
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if len(msg) > 120 {
+			msg = msg[:120]
+		}
+		if msg == "" {
+			msg = binary + " not available or container not found"
+		}
+		return "down", latency, binary + " inspect failed: " + msg
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(out)), "|", 2)
+	state := parts[0]
+	restarts := "?"
+	if len(parts) > 1 {
+		restarts = parts[1]
+	}
+	if state != expected {
+		return "down", latency, fmt.Sprintf("container state '%s' (expected '%s'), restarts=%s", state, expected, restarts)
+	}
+	return "up", latency, fmt.Sprintf("container %s, restarts=%s", state, restarts)
+}
+
+func checkInfraHTTP(target string, s infraSettings, defaultPort, defaultPath, authHeaderName, authPrefix string) (string, int, string) {
+	host := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSuffix(target, "/"), "https://"), "http://")
+	if h, _, err := net.SplitHostPort(host); err != nil || h == "" {
+		host = net.JoinHostPort(strings.Trim(host, "[]"), defaultPort)
+	}
+	path := s.Path
+	if path == "" {
+		path = defaultPath
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	req, err := http.NewRequest("GET", "https://"+host+path, nil)
+	if err != nil {
+		return "down", 0, "invalid target"
+	}
+	if token := strings.TrimSpace(s.Token); token != "" {
+		req.Header.Set(authHeaderName, authPrefix+token)
+	}
+	start := time.Now()
+	client := checkedHTTPClient(10*time.Second, !s.InsecureSkipVerify)
+	resp, err := client.Do(req)
+	latency := int(time.Since(start).Milliseconds())
+	if err != nil {
+		errMsg := err.Error()
+		if len(errMsg) > 120 {
+			errMsg = errMsg[:120]
+		}
+		return "down", latency, errMsg
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "down", latency, fmt.Sprintf("HTTP %d", resp.StatusCode)
+	}
+	if s.ExpectSubstring != "" && !strings.Contains(string(body), s.ExpectSubstring) {
+		return "down", latency, "HTTP 200 but response missing expected content"
+	}
+	return "up", latency, fmt.Sprintf("HTTP %d", resp.StatusCode)
+}
+
+func checkKubernetes(target string, settings json.RawMessage) (string, int, string) {
+	var s infraSettings
+	json.Unmarshal(settings, &s)
+	return checkInfraHTTP(target, s, "6443", "/readyz", "Authorization", "Bearer ")
+}
+
+func checkProxmox(target string, settings json.RawMessage) (string, int, string) {
+	var s infraSettings
+	json.Unmarshal(settings, &s)
+	return checkInfraHTTP(target, s, "8006", "/api2/json/version", "Authorization", "PVEAPIToken=")
+}
+
+func checkVMware(target string, settings json.RawMessage) (string, int, string) {
+	var s infraSettings
+	json.Unmarshal(settings, &s)
+	return checkInfraHTTP(target, s, "443", "/sdk/vimService.wsdl", "vmware-api-session-id", "")
+}
+
+func checkCeph(target string, settings json.RawMessage) (string, int, string) {
+	var s infraSettings
+	json.Unmarshal(settings, &s)
+	if s.Path == "" && s.ExpectSubstring == "" {
+		s.ExpectSubstring = `"status":"HEALTH_OK"`
+	}
+	return checkInfraHTTP(target, s, "8443", "/api/health", "Authorization", "Bearer ")
+}
+
+func checkDockerSwarm(_ string, settings json.RawMessage) (string, int, string) {
+	var s infraSettings
+	json.Unmarshal(settings, &s)
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "info", "-f", "{{.Swarm.LocalNodeState}}|{{.Swarm.ControlAvailable}}").CombinedOutput()
+	latency := int(time.Since(start).Milliseconds())
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if len(msg) > 120 {
+			msg = msg[:120]
+		}
+		return "down", latency, "docker swarm check failed: " + msg
+	}
+	parts := strings.Split(strings.TrimSpace(string(out)), "|")
+	state := parts[0]
+	if state != "active" {
+		return "down", latency, fmt.Sprintf("node swarm state '%s' (expected active)", state)
+	}
+	if svc := strings.TrimSpace(s.Service); svc != "" {
+		if !validExecTarget(svc) {
+			return "down", latency, "invalid service name"
+		}
+		svcOut, svcErr := exec.CommandContext(ctx, "docker", "service", "ls", "--filter", "name="+svc, "--format", "{{.Replicas}}").CombinedOutput()
+		if svcErr != nil {
+			return "down", latency, "service lookup failed: " + strings.TrimSpace(string(svcOut))
+		}
+		replicas := strings.TrimSpace(string(svcOut))
+		parts := strings.SplitN(replicas, "/", 2)
+		if len(parts) != 2 {
+			return "down", latency, fmt.Sprintf("service '%s' not found or no replicas", svc)
+		}
+		var ready, desired int
+		fmt.Sscanf(parts[0], "%d", &ready)
+		fmt.Sscanf(parts[1], "%d", &desired)
+		min := s.MinReplicas
+		if min < 1 {
+			min = 1
+		}
+		if ready < min {
+			return "down", latency, fmt.Sprintf("service '%s' replicas %s (min %d)", svc, replicas, min)
+		}
+		return "up", latency, fmt.Sprintf("swarm active, service '%s' replicas %s", svc, replicas)
+	}
+	return "up", latency, "swarm node active"
+}
+
+func checkNetworkDevice(target string, settings json.RawMessage) (string, int, string) {
+	var s infraSettings
+	json.Unmarshal(settings, &s)
+	status, latency, msg := checkPing(target)
+	if status != "up" {
+		return status, latency, msg
+	}
+	ports := strings.Split(s.TCPPorts, ",")
+	var closed []string
+	for _, p := range ports {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		addr := net.JoinHostPort(target, p)
+		if tcpConnectLatency(addr) < 0 {
+			closed = append(closed, p)
+		}
+	}
+	if len(closed) > 0 {
+		return "down", latency, fmt.Sprintf("host up but ports closed: %s", strings.Join(closed, ","))
+	}
+	return "up", latency, msg
+}
+
 func runMonitorCheck(monitor AssignedMonitor) (MonitorCheckResult, bool) {
 	if isBlockedTarget(monitor.Target) {
 		return MonitorCheckResult{Status: "down", Latency: 0, Message: "blocked target: link-local/cloud-metadata addresses are not allowed"}, true
@@ -564,6 +753,30 @@ func runMonitorCheck(monitor AssignedMonitor) (MonitorCheckResult, bool) {
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
 	case "game_server":
 		status, latency, msg := checkGameServer(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "docker":
+		status, latency, msg := checkContainerRuntime("docker", monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "podman":
+		status, latency, msg := checkContainerRuntime("podman", monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "docker_swarm":
+		status, latency, msg := checkDockerSwarm(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "vmware":
+		status, latency, msg := checkVMware(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "ceph":
+		status, latency, msg := checkCeph(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "kubernetes":
+		status, latency, msg := checkKubernetes(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "proxmox":
+		status, latency, msg := checkProxmox(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "network_device":
+		status, latency, msg := checkNetworkDevice(monitor.Target, monitor.Settings)
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
 	default:
 		return MonitorCheckResult{}, false
