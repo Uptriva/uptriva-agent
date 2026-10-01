@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -77,17 +78,31 @@ func envFlagEnabled(name string) bool {
 	return false
 }
 
+func configPath() string {
+	if p := strings.TrimSpace(os.Getenv("SHXRK_AGENT_CONFIG")); p != "" {
+		return p
+	}
+	if _, err := os.Stat("agent_config.json"); err == nil {
+		return "agent_config.json"
+	}
+	if runtime.GOOS == "darwin" {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, ".shxrk", "agent_config.json")
+	}
+	return "/etc/shxrk/agent_config.json"
+}
+
 func saveConfig(config Config) error {
 	b, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile("agent_config.json", b, 0600)
+	return os.WriteFile(configPath(), b, 0600)
 }
 
 func loadConfig() (Config, error) {
 	var config Config
-	b, err := os.ReadFile("agent_config.json")
+	b, err := os.ReadFile(configPath())
 	if err != nil {
 		return config, err
 	}
@@ -662,6 +677,15 @@ func main() {
 	enableCommandsFlag := flag.Bool("remote-commands", false, "")
 	allowExecFlag := flag.Bool("allow-exec-script", false, "")
 	flag.Parse()
+
+	switch flag.Arg(0) {
+	case "update":
+		*updateFlag = true
+	case "check-update":
+		*checkUpdateFlag = true
+	case "version":
+		*versionFlag = true
+	}
 
 	if *tokenFlag == "" {
 		*tokenFlag = strings.TrimSpace(os.Getenv("AGENT_TOKEN"))
