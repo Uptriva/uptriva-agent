@@ -18,7 +18,15 @@ type GameServerSettings struct {
 	QueryPort   int    `json:"query_port"`
 }
 
-var gameServerHTTPClient = &http.Client{Timeout: 8 * time.Second}
+var gameServerHTTPClient = &http.Client{
+	Timeout: 8 * time.Second,
+	Transport: &http.Transport{
+		DialContext: checkedDialContext,
+	},
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
 
 func checkGameServer(target string, settings json.RawMessage) (string, int, string) {
 	s := GameServerSettings{GameType: "custom", QueryMethod: "tcp_connect"}
@@ -65,7 +73,7 @@ func checkGameServer(target string, settings json.RawMessage) (string, int, stri
 		}
 		return queryGenericJSON(host, serverPort, latency)
 	case "tcp_connect":
-		conn, err := net.DialTimeout("tcp", target, 10*time.Second)
+		conn, err := checkedDialTimeout("tcp", target, 10*time.Second)
 		lat := latency()
 		if err != nil {
 			return "down", lat, err.Error()
@@ -83,7 +91,7 @@ var a2sInfoRequest = append([]byte{0xFF, 0xFF, 0xFF, 0xFF, 'T'}, []byte("Source 
 
 func queryA2S(host string, port int, latency func() int) (string, int, string) {
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	conn, err := net.DialTimeout("udp", addr, 8*time.Second)
+	conn, err := checkedDialTimeout("udp", addr, 8*time.Second)
 	if err != nil {
 		return "down", latency(), err.Error()
 	}
@@ -202,7 +210,7 @@ func parseA2SInfo(payload []byte) (*a2sInfo, error) {
 
 func queryMinecraft(host string, port int, latency func() int) (string, int, string) {
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	conn, err := net.DialTimeout("tcp", addr, 8*time.Second)
+	conn, err := checkedDialTimeout("tcp", addr, 8*time.Second)
 	if err != nil {
 		return "down", latency(), err.Error()
 	}

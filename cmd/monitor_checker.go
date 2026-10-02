@@ -38,12 +38,21 @@ type MonitorCheckResult struct {
 var blockedTargetNets []*net.IPNet
 
 func init() {
-	for _, cidr := range []string{"169.254.0.0/16", "fe80::/10", "ff00::/8", "224.0.0.0/4"} {
+	for _, cidr := range []string{
+		"169.254.0.0/16", "fe80::/10", "ff00::/8", "224.0.0.0/4",
+		"100.64.0.0/10", "192.0.0.0/24", "198.18.0.0/15", "240.0.0.0/4", "fec0::/10",
+	} {
 		_, n, err := net.ParseCIDR(cidr)
 		if err == nil {
 			blockedTargetNets = append(blockedTargetNets, n)
 		}
 	}
+}
+
+var blockedExactIPs = []net.IP{
+	net.IPv4(169, 254, 169, 254),
+	net.IPv4(100, 100, 2, 136),
+	net.ParseIP("fd00:ec2::254"),
 }
 
 func blockedTargetHost(target string) string {
@@ -71,6 +80,11 @@ func isBlockedIP(ip net.IP) bool {
 			return true
 		}
 	}
+	for _, b := range blockedExactIPs {
+		if ip.Equal(b) {
+			return true
+		}
+	}
 	return false
 }
 
@@ -94,20 +108,15 @@ func isBlockedTarget(target string) bool {
 	return false
 }
 
-func checkedDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
+func resolveCheckedHost(ctx context.Context, host string) ([]net.IP, error) {
 	if strings.EqualFold(host, "metadata.google.internal") || strings.EqualFold(host, "metadata.goog") {
 		return nil, fmt.Errorf("blocked target host: %s", host)
 	}
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
 		if isBlockedIP(ip) {
 			return nil, fmt.Errorf("blocked target IP: %s", host)
 		}
-		return dialer.DialContext(ctx, network, addr)
+		return []net.IP{ip}, nil
 	}
 	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 	if err != nil {
@@ -121,6 +130,19 @@ func checkedDialContext(ctx context.Context, network, addr string) (net.Conn, er
 			return nil, fmt.Errorf("blocked resolved IP %s for host %s", ip.String(), host)
 		}
 	}
+	return ips, nil
+}
+
+func checkedDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := resolveCheckedHost(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	var lastErr error
 	for _, ip := range ips {
 		conn, derr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
@@ -224,7 +246,7 @@ func checkTCP(target string) (string, int, string) {
 
 func tcpConnectLatency(addr string) int {
 	start := time.Now()
-	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	conn, err := checkedDialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
 		return -1
 	}
@@ -251,20 +273,31 @@ func checkPing(target string) (string, int, string) {
 	if !validExecTarget(target) {
 		return "down", 0, "invalid ping target"
 	}
-	if isBlockedTarget(target) {
-		return "down", 0, "blocked target: link-local/cloud-metadata addresses are not allowed"
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+
+	resolveCtx, resolveCancel := context.WithTimeout(ctx, 5*time.Second)
+	ips, err := resolveCheckedHost(resolveCtx, target)
+	resolveCancel()
+	if err != nil {
+		return "down", 0, err.Error()
+	}
+	pingTarget := ips[0].String()
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			pingTarget = ip.String()
+			break
+		}
+	}
 
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.CommandContext(ctx, "ping", "-n", "1", "-w", "5000", target)
+		cmd = exec.CommandContext(ctx, "ping", "-n", "1", "-w", "5000", pingTarget)
 	case "darwin":
-		cmd = exec.CommandContext(ctx, "ping", "-c", "1", "-W", "5000", target)
+		cmd = exec.CommandContext(ctx, "ping", "-c", "1", "-W", "5000", pingTarget)
 	default:
-		cmd = exec.CommandContext(ctx, "ping", "-c", "1", "-W", "5", target)
+		cmd = exec.CommandContext(ctx, "ping", "-c", "1", "-W", "5", pingTarget)
 	}
 	if _, err := cmd.Output(); err != nil {
 		latency := int(time.Since(start).Milliseconds())
@@ -303,22 +336,7 @@ func checkUDP(target string) (string, int, string) {
 	if _, _, err := net.SplitHostPort(target); err != nil {
 		return "down", 0, "invalid target format, expected host:port"
 	}
-	host, port, _ := net.SplitHostPort(target)
-	if ip := net.ParseIP(strings.Trim(host, "[]")); ip == nil {
-		ips, lerr := net.DefaultResolver.LookupIP(context.Background(), "ip", host)
-		if lerr != nil {
-			return "down", 0, lerr.Error()
-		}
-		for _, ip := range ips {
-			if isBlockedIP(ip) {
-				return "down", 0, "blocked target IP"
-			}
-		}
-		target = net.JoinHostPort(ips[0].String(), port)
-	} else if isBlockedIP(ip) {
-		return "down", 0, "blocked target IP"
-	}
-	conn, err := net.DialTimeout("udp", target, 3*time.Second)
+	conn, err := checkedDialTimeout("udp", target, 3*time.Second)
 	if err != nil {
 		return "down", int(time.Since(start).Milliseconds()), err.Error()
 	}

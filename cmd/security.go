@@ -48,28 +48,29 @@ func collectSecurityEvents() []agentEventItem {
 		return nil
 	}
 
-	var events []agentEventItem
+	counts := map[string]int{}
+	var order []string
 	scanner := bufio.NewScanner(strings.NewReader(string(out)))
 	for scanner.Scan() {
 		line := scanner.Text()
-		matched := ""
 		for _, p := range authFailurePatterns {
 			if strings.Contains(line, p) {
-				matched = p
+				if _, ok := counts[p]; !ok {
+					order = append(order, p)
+				}
+				counts[p]++
 				break
 			}
 		}
-		if matched == "" {
-			continue
-		}
-		if len(line) > 300 {
-			line = line[:300]
-		}
+	}
+
+	var events []agentEventItem
+	for _, p := range order {
 		events = append(events, agentEventItem{
 			Type:     "auth_failed",
 			Severity: "warning",
-			Message:  fmt.Sprintf("Failed authentication: %s", line),
-			Metadata: map[string]interface{}{"pattern": matched},
+			Message:  fmt.Sprintf("Failed authentication: %d attempt(s) matching %q", counts[p], p),
+			Metadata: map[string]interface{}{"pattern": p, "count": counts[p]},
 		})
 		if len(events) >= 20 {
 			break

@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,54 @@ type AgentCommandPoll struct {
 	ID      string `json:"id"`
 	Command string `json:"command"`
 	Params  string `json:"params"`
+}
+
+var cmdDedup = struct {
+	sync.Mutex
+	loaded bool
+	seen   map[string]bool
+	order  []string
+}{seen: make(map[string]bool)}
+
+func commandStatePath() string {
+	return configPath() + ".state"
+}
+
+func markCommandExecuted(id string) bool {
+	if id == "" {
+		return true
+	}
+	cmdDedup.Lock()
+	defer cmdDedup.Unlock()
+	if !cmdDedup.loaded {
+		cmdDedup.loaded = true
+		if b, err := os.ReadFile(commandStatePath()); err == nil {
+			var ids []string
+			if json.Unmarshal(b, &ids) == nil {
+				for _, eid := range ids {
+					if !cmdDedup.seen[eid] {
+						cmdDedup.seen[eid] = true
+						cmdDedup.order = append(cmdDedup.order, eid)
+					}
+				}
+			}
+		}
+	}
+	if cmdDedup.seen[id] {
+		return false
+	}
+	cmdDedup.seen[id] = true
+	cmdDedup.order = append(cmdDedup.order, id)
+	if len(cmdDedup.order) > 512 {
+		for _, old := range cmdDedup.order[:len(cmdDedup.order)-512] {
+			delete(cmdDedup.seen, old)
+		}
+		cmdDedup.order = append([]string(nil), cmdDedup.order[len(cmdDedup.order)-512:]...)
+	}
+	if b, err := json.Marshal(cmdDedup.order); err == nil {
+		_ = os.WriteFile(commandStatePath(), b, 0600)
+	}
+	return true
 }
 
 func agentHTTPClient() *http.Client {
@@ -60,6 +109,11 @@ func pollAgentCommands(apiURL, token string, cfg *Config) {
 }
 
 func executeAgentCommand(apiURL, token string, cmd AgentCommandPoll, cfg *Config) {
+	if !markCommandExecuted(cmd.ID) {
+		ackAgentCommand(apiURL, token, cmd.ID, "completed", "duplicate command delivery ignored")
+		return
+	}
+
 	var params map[string]string
 	if cmd.Params != "" {
 		_ = json.Unmarshal([]byte(cmd.Params), &params)
@@ -157,6 +211,7 @@ func runScript(script string) string {
 	} else {
 		cmd = exec.Command("/bin/sh", "-c", script)
 	}
+	setProcGroup(cmd)
 	type result struct {
 		out string
 		err error
@@ -174,9 +229,7 @@ func runScript(script string) string {
 		}
 		return out
 	case <-time.After(commandExecTimeout):
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
+		killProcGroup(cmd)
 		return "ERROR: script timed out"
 	}
 }

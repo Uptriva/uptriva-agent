@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
@@ -16,7 +17,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -274,14 +274,20 @@ func performHandshake(token string) (Config, error) {
 
 	var res struct {
 		AgentID string `json:"agent_id"`
+		Token   string `json:"token"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return Config{}, err
 	}
 
+	sessionToken := token
+	if res.Token != "" {
+		sessionToken = res.Token
+	}
+
 	return Config{
 		APIURL:                    DefaultAPIURL,
-		Token:                     token,
+		Token:                     sessionToken,
 		AgentID:                   res.AgentID,
 		Interval:                  DefaultInterval,
 		AutoUpdateEnabled:         DefaultAutoUpdateEnabled,
@@ -319,18 +325,11 @@ var releasePublicKey = func() ed25519.PublicKey {
 }()
 
 func manifestSigningPayload(m *AgentManifest) []byte {
-	keys := make([]string, 0, len(m.Platforms))
-	for k := range m.Platforms {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var b strings.Builder
-	fmt.Fprintf(&b, "v1\n%s\n%s\n%s\n", m.Version, m.MinAgentVersion, m.PrivacyPolicyVersion)
-	for _, k := range keys {
-		a := m.Platforms[k]
-		fmt.Fprintf(&b, "%s|%s|%s\n", k, a.Checksum, a.URL)
-	}
-	return []byte(b.String())
+	signed := *m
+	signed.KeyID = ""
+	signed.Signature = ""
+	payload, _ := json.Marshal(signed)
+	return payload
 }
 
 func verifyManifestSignature(m *AgentManifest) error {
@@ -567,11 +566,8 @@ func restoreVerifiedBackup(binPath string) bool {
 	sumPath := binPath + ".bak.sha256"
 	expected, err := os.ReadFile(sumPath)
 	if err != nil {
-		fmt.Println("[update] rollback: no checksum record, restoring legacy backup without verification")
-		if rerr := os.Rename(backupPath, binPath); rerr != nil {
-			return false
-		}
-		return true
+		fmt.Println("[update] rollback refused: no checksum record for backup binary")
+		return false
 	}
 	actual, err := fileSHA256(backupPath)
 	if err != nil || actual != strings.TrimSpace(string(expected)) {
@@ -876,7 +872,7 @@ func main() {
 				return func(w http.ResponseWriter, r *http.Request) {
 					authHeader := r.Header.Get("Authorization")
 					expectedAuth := "Bearer " + config.Token
-					if authHeader != expectedAuth {
+					if subtle.ConstantTimeCompare([]byte(authHeader), []byte(expectedAuth)) != 1 {
 						http.Error(w, "Unauthorized", http.StatusUnauthorized)
 						return
 					}
@@ -968,6 +964,8 @@ func main() {
 				fmt.Printf("[agent] metrics rejected with %d — re-running handshake\n", resp.StatusCode)
 				if cfg, herr := performHandshake(config.Token); herr == nil {
 					config.AgentID = cfg.AgentID
+					config.Token = cfg.Token
+					_ = saveConfig(config)
 					fmt.Printf("[agent] handshake recovered, agent_id=%s\n", config.AgentID)
 				} else {
 					fmt.Printf("[agent] handshake failed: %v\n", herr)
