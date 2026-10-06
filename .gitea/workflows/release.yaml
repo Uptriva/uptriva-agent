@@ -44,7 +44,9 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           echo "$VERSION" > dist/version
-          echo "$VERSION" > dist/min_agent_version
+          if [ -f MIN_AGENT_VERSION ]; then
+            cp MIN_AGENT_VERSION dist/min_agent_version
+          fi
           if [ -f privacy_policy_version ]; then
             cp privacy_policy_version dist/privacy_policy_version
           else
