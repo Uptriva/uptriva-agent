@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -142,6 +143,8 @@ func executeAgentCommand(apiURL, token string, cmd AgentCommandPoll, cfg *Config
 		result = collectDiagnostics(apiURL)
 	case "update_packages":
 		result = updatePackages()
+	case "set_feature_flags":
+		result = applyFeatureFlags(cfg, params)
 	default:
 		status = "failed"
 		result = fmt.Sprintf("unknown command: %s", cmd.Command)
@@ -293,6 +296,32 @@ func updatePackages() string {
 
 	lastPkgCheck = time.Time{}
 	return truncate(log.String(), 4000)
+}
+
+func applyFeatureFlags(cfg *Config, params map[string]string) string {
+	truthy := func(v string) bool {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "yes", "on":
+			return true
+		}
+		return false
+	}
+	var applied []string
+	if v, ok := params["security_events"]; ok {
+		cfg.SecurityEventsEnabled = truthy(v)
+		applied = append(applied, "security_events="+strconv.FormatBool(cfg.SecurityEventsEnabled))
+	}
+	if v, ok := params["package_monitoring"]; ok {
+		cfg.PackageMonitoringEnabled = truthy(v)
+		applied = append(applied, "package_monitoring="+strconv.FormatBool(cfg.PackageMonitoringEnabled))
+	}
+	if len(applied) == 0 {
+		return "ERROR: no known flags in params"
+	}
+	if err := saveConfig(*cfg); err != nil {
+		return fmt.Sprintf("ERROR: flags applied in memory but config save failed: %v", err)
+	}
+	return "applied: " + strings.Join(applied, ", ")
 }
 
 func rebootHost() {
