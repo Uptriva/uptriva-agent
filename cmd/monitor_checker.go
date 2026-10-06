@@ -477,6 +477,9 @@ func checkRedis(target string, settings json.RawMessage) (string, int, string) {
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
 	if cfg.Password != "" {
+		if strings.ContainsAny(cfg.Password, "\r\n\x00") {
+			return "down", int(time.Since(start).Milliseconds()), "credentials contain invalid characters"
+		}
 		if _, err := conn.Write(fmt.Appendf(nil, "AUTH %s\r\n", cfg.Password)); err != nil {
 			return "down", int(time.Since(start).Milliseconds()), "failed to send AUTH"
 		}
@@ -752,7 +755,7 @@ func checkRabbitMQ(target string, settings json.RawMessage) (string, int, string
 		addr = net.JoinHostPort(host, fmt.Sprintf("%d", s.Port))
 	}
 	start := time.Now()
-	conn, err := net.DialTimeout("tcp", addr, 8*time.Second)
+	conn, err := checkedDialTimeout("tcp", addr, 8*time.Second)
 	if err != nil {
 		return "down", int(time.Since(start).Milliseconds()), "TCP connect failed: " + err.Error()
 	}
@@ -787,10 +790,14 @@ func checkMQTT(target string, settings json.RawMessage) (string, int, string) {
 	}
 
 	clientID := "shxrk-probe"
+	username := strings.TrimSpace(s.Username)
+	if len(username) > 255 || len(s.Password) > 255 {
+		return "down", 0, "MQTT credentials exceed 255-byte limit"
+	}
 	var vh []byte
 	vh = append(vh, 0x00, 0x04, 'M', 'Q', 'T', 'T', 0x04)
 	flags := byte(0x02)
-	if strings.TrimSpace(s.Username) != "" {
+	if username != "" {
 		flags |= 0x80
 		if s.Password != "" {
 			flags |= 0x40
@@ -799,8 +806,8 @@ func checkMQTT(target string, settings json.RawMessage) (string, int, string) {
 	vh = append(vh, flags, 0x00, 0x3C)
 	payload := []byte{0x00, byte(len(clientID))}
 	payload = append(payload, clientID...)
-	if strings.TrimSpace(s.Username) != "" {
-		u := s.Username
+	if username != "" {
+		u := username
 		payload = append(payload, 0x00, byte(len(u)))
 		payload = append(payload, u...)
 		if s.Password != "" {
@@ -814,7 +821,7 @@ func checkMQTT(target string, settings json.RawMessage) (string, int, string) {
 	pkt = append(pkt, payload...)
 
 	start := time.Now()
-	conn, err := net.DialTimeout("tcp", addr, 8*time.Second)
+	conn, err := checkedDialTimeout("tcp", addr, 8*time.Second)
 	if err != nil {
 		return "down", int(time.Since(start).Milliseconds()), "TCP connect failed: " + err.Error()
 	}
@@ -857,7 +864,7 @@ func checkKafka(target string, settings json.RawMessage) (string, int, string) {
 	pkt := append(frame, body...)
 
 	start := time.Now()
-	conn, err := net.DialTimeout("tcp", addr, 8*time.Second)
+	conn, err := checkedDialTimeout("tcp", addr, 8*time.Second)
 	if err != nil {
 		return "down", int(time.Since(start).Milliseconds()), "TCP connect failed: " + err.Error()
 	}
@@ -953,10 +960,11 @@ func checkSNMP(target string, settings json.RawMessage) (string, int, string) {
 	}
 
 	reqID := int(time.Now().UnixNano() & 0x7fffffff)
+	reqIDBytes := []byte{byte(reqID >> 24), byte(reqID >> 16), byte(reqID >> 8), byte(reqID)}
 	varbind := berTLV(0x30, append(berTLV(0x06, oidBytes), 0x05, 0x00))
 	varbindList := berTLV(0x30, varbind)
 	pdu := berTLV(0xa0, append(append(append(
-		berTLV(0x02, []byte{byte(reqID >> 24), byte(reqID >> 16), byte(reqID >> 8), byte(reqID)}),
+		berTLV(0x02, reqIDBytes),
 		berTLV(0x02, []byte{0x00})...),
 		berTLV(0x02, []byte{0x00})...),
 		varbindList...))
@@ -966,7 +974,7 @@ func checkSNMP(target string, settings json.RawMessage) (string, int, string) {
 		pdu...))
 
 	start := time.Now()
-	conn, err := net.DialTimeout("udp", addr, 5*time.Second)
+	conn, err := checkedDialTimeout("udp", addr, 5*time.Second)
 	if err != nil {
 		return "down", int(time.Since(start).Milliseconds()), "UDP dial failed: " + err.Error()
 	}
@@ -985,9 +993,12 @@ func checkSNMP(target string, settings json.RawMessage) (string, int, string) {
 	if n < 4 || resp[0] != 0x30 {
 		return "down", latency, "malformed SNMP response"
 	}
+	if !bytes.Contains(resp, reqIDBytes) {
+		return "down", latency, "SNMP response did not echo request id"
+	}
 	for i := 0; i < n; i++ {
 		if resp[i] == 0xa2 {
-			return "up", latency, fmt.Sprintf("SNMPv2c response received (community %q)", community)
+			return "up", latency, "SNMPv2c GetResponse received"
 		}
 	}
 	return "down", latency, "response was not an SNMP GetResponse"
