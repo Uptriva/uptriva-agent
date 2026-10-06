@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -549,6 +550,11 @@ type infraSettings struct {
 	TCPPorts           string `json:"tcp_ports"`
 	Service            string `json:"service"`
 	MinReplicas        int    `json:"min_replicas"`
+	Port               int    `json:"port"`
+	Community          string `json:"community"`
+	Username           string `json:"username"`
+	Password           string `json:"password"`
+	OID                string `json:"oid"`
 }
 
 func checkContainerRuntime(binary, target string, settings json.RawMessage) (string, int, string) {
@@ -729,6 +735,264 @@ func checkNetworkDevice(target string, settings json.RawMessage) (string, int, s
 	return "up", latency, msg
 }
 
+func infraHostPort(target string, defaultPort int) string {
+	host := strings.TrimSpace(target)
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return host
+	}
+	return net.JoinHostPort(strings.Trim(host, "[]"), fmt.Sprintf("%d", defaultPort))
+}
+
+func checkRabbitMQ(target string, settings json.RawMessage) (string, int, string) {
+	var s infraSettings
+	json.Unmarshal(settings, &s)
+	addr := infraHostPort(target, 5672)
+	if s.Port > 0 {
+		host, _, _ := net.SplitHostPort(addr)
+		addr = net.JoinHostPort(host, fmt.Sprintf("%d", s.Port))
+	}
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", addr, 8*time.Second)
+	if err != nil {
+		return "down", int(time.Since(start).Milliseconds()), "TCP connect failed: " + err.Error()
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(8 * time.Second))
+	if _, err := conn.Write([]byte("AMQP\x00\x00\x09\x01")); err != nil {
+		return "down", int(time.Since(start).Milliseconds()), "protocol header write failed"
+	}
+	buf := make([]byte, 7)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return "down", int(time.Since(start).Milliseconds()), "no AMQP frame in response"
+	}
+	latency := int(time.Since(start).Milliseconds())
+	if buf[0] != 0x01 {
+		return "down", latency, fmt.Sprintf("unexpected response byte 0x%02x (not an AMQP frame)", buf[0])
+	}
+	class := int(buf[3])<<8 | int(buf[4])
+	method := int(buf[5])<<8 | int(buf[6])
+	if class == 10 && method == 10 {
+		return "up", latency, "AMQP broker responded with connection.start"
+	}
+	return "up", latency, fmt.Sprintf("AMQP frame received (class %d method %d)", class, method)
+}
+
+func checkMQTT(target string, settings json.RawMessage) (string, int, string) {
+	var s infraSettings
+	json.Unmarshal(settings, &s)
+	addr := infraHostPort(target, 1883)
+	if s.Port > 0 {
+		host, _, _ := net.SplitHostPort(addr)
+		addr = net.JoinHostPort(host, fmt.Sprintf("%d", s.Port))
+	}
+
+	clientID := "shxrk-probe"
+	var vh []byte
+	vh = append(vh, 0x00, 0x04, 'M', 'Q', 'T', 'T', 0x04)
+	flags := byte(0x02)
+	if strings.TrimSpace(s.Username) != "" {
+		flags |= 0x80
+		if s.Password != "" {
+			flags |= 0x40
+		}
+	}
+	vh = append(vh, flags, 0x00, 0x3C)
+	payload := []byte{0x00, byte(len(clientID))}
+	payload = append(payload, clientID...)
+	if strings.TrimSpace(s.Username) != "" {
+		u := s.Username
+		payload = append(payload, 0x00, byte(len(u)))
+		payload = append(payload, u...)
+		if s.Password != "" {
+			payload = append(payload, 0x00, byte(len(s.Password)))
+			payload = append(payload, s.Password...)
+		}
+	}
+	remain := len(vh) + len(payload)
+	pkt := []byte{0x10, byte(remain)}
+	pkt = append(pkt, vh...)
+	pkt = append(pkt, payload...)
+
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", addr, 8*time.Second)
+	if err != nil {
+		return "down", int(time.Since(start).Milliseconds()), "TCP connect failed: " + err.Error()
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(8 * time.Second))
+	if _, err := conn.Write(pkt); err != nil {
+		return "down", int(time.Since(start).Milliseconds()), "CONNECT write failed"
+	}
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return "down", int(time.Since(start).Milliseconds()), "no CONNACK in response"
+	}
+	latency := int(time.Since(start).Milliseconds())
+	if buf[0] != 0x20 {
+		return "down", latency, fmt.Sprintf("unexpected packet type 0x%02x (expected CONNACK 0x20)", buf[0])
+	}
+	rc := buf[3]
+	if rc == 0 {
+		return "up", latency, "MQTT broker accepted CONNECT"
+	}
+	return "up", latency, fmt.Sprintf("MQTT broker responded (CONNACK rc=%d — broker alive, auth not accepted)", rc)
+}
+
+func checkKafka(target string, settings json.RawMessage) (string, int, string) {
+	var s infraSettings
+	json.Unmarshal(settings, &s)
+	addr := infraHostPort(target, 9092)
+	if s.Port > 0 {
+		host, _, _ := net.SplitHostPort(addr)
+		addr = net.JoinHostPort(host, fmt.Sprintf("%d", s.Port))
+	}
+
+	clientID := "shxrk-probe"
+	body := []byte{0x00, 0x12, 0x00, 0x00}
+	body = append(body, 0x00, 0x00, 0x00, 0x01)
+	body = append(body, 0x00, byte(len(clientID)))
+	body = append(body, clientID...)
+	frame := make([]byte, 4)
+	frame[3] = byte(len(body))
+	pkt := append(frame, body...)
+
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", addr, 8*time.Second)
+	if err != nil {
+		return "down", int(time.Since(start).Milliseconds()), "TCP connect failed: " + err.Error()
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(8 * time.Second))
+	if _, err := conn.Write(pkt); err != nil {
+		return "down", int(time.Since(start).Milliseconds()), "ApiVersions write failed"
+	}
+	head := make([]byte, 8)
+	if _, err := io.ReadFull(conn, head); err != nil {
+		return "down", int(time.Since(start).Milliseconds()), "no response frame"
+	}
+	latency := int(time.Since(start).Milliseconds())
+	corrID := int(head[4])<<24 | int(head[5])<<16 | int(head[6])<<8 | int(head[7])
+	if corrID != 1 {
+		return "down", latency, fmt.Sprintf("unexpected correlation id %d", corrID)
+	}
+	return "up", latency, "Kafka broker answered ApiVersions"
+}
+
+func berLen(n int) []byte {
+	if n < 0x80 {
+		return []byte{byte(n)}
+	}
+	b := []byte{}
+	for n > 0 {
+		b = append([]byte{byte(n & 0xff)}, b...)
+		n >>= 8
+	}
+	return append([]byte{0x80 | byte(len(b))}, b...)
+}
+
+func berTLV(tag byte, val []byte) []byte {
+	out := []byte{tag}
+	out = append(out, berLen(len(val))...)
+	return append(out, val...)
+}
+
+func berOID(oid string) []byte {
+	parts := strings.Split(strings.TrimSpace(oid), ".")
+	var nums []int
+	for _, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return nil
+		}
+		nums = append(nums, n)
+	}
+	if len(nums) < 2 || nums[0] > 2 || nums[1] > 39 {
+		return nil
+	}
+	out := []byte{byte(nums[0]*40 + nums[1])}
+	for _, n := range nums[2:] {
+		if n < 0 {
+			return nil
+		}
+		if n < 0x80 {
+			out = append(out, byte(n))
+			continue
+		}
+		var enc []byte
+		for n > 0 {
+			enc = append([]byte{byte(n & 0x7f)}, enc...)
+			n >>= 7
+		}
+		for i := 0; i < len(enc)-1; i++ {
+			enc[i] |= 0x80
+		}
+		out = append(out, enc...)
+	}
+	return out
+}
+
+func checkSNMP(target string, settings json.RawMessage) (string, int, string) {
+	var s infraSettings
+	json.Unmarshal(settings, &s)
+	community := strings.TrimSpace(s.Community)
+	if community == "" {
+		community = "public"
+	}
+	oid := strings.TrimSpace(s.OID)
+	if oid == "" {
+		oid = "1.3.6.1.2.1.1.3.0"
+	}
+	oidBytes := berOID(oid)
+	if oidBytes == nil {
+		return "down", 0, "invalid OID"
+	}
+	addr := infraHostPort(target, 161)
+	if s.Port > 0 {
+		host, _, _ := net.SplitHostPort(addr)
+		addr = net.JoinHostPort(host, fmt.Sprintf("%d", s.Port))
+	}
+
+	reqID := int(time.Now().UnixNano() & 0x7fffffff)
+	varbind := berTLV(0x30, append(berTLV(0x06, oidBytes), 0x05, 0x00))
+	varbindList := berTLV(0x30, varbind)
+	pdu := berTLV(0xa0, append(append(append(
+		berTLV(0x02, []byte{byte(reqID >> 24), byte(reqID >> 16), byte(reqID >> 8), byte(reqID)}),
+		berTLV(0x02, []byte{0x00})...),
+		berTLV(0x02, []byte{0x00})...),
+		varbindList...))
+	msg := berTLV(0x30, append(append(
+		berTLV(0x02, []byte{0x01}),
+		berTLV(0x04, []byte(community))...),
+		pdu...))
+
+	start := time.Now()
+	conn, err := net.DialTimeout("udp", addr, 5*time.Second)
+	if err != nil {
+		return "down", int(time.Since(start).Milliseconds()), "UDP dial failed: " + err.Error()
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write(msg); err != nil {
+		return "down", int(time.Since(start).Milliseconds()), "SNMP write failed"
+	}
+	buf := make([]byte, 4096)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return "down", int(time.Since(start).Milliseconds()), "no SNMP response (community wrong or device unreachable)"
+	}
+	latency := int(time.Since(start).Milliseconds())
+	resp := buf[:n]
+	if n < 4 || resp[0] != 0x30 {
+		return "down", latency, "malformed SNMP response"
+	}
+	for i := 0; i < n; i++ {
+		if resp[i] == 0xa2 {
+			return "up", latency, fmt.Sprintf("SNMPv2c response received (community %q)", community)
+		}
+	}
+	return "down", latency, "response was not an SNMP GetResponse"
+}
+
 func runMonitorCheck(monitor AssignedMonitor) (MonitorCheckResult, bool) {
 	if isBlockedTarget(monitor.Target) {
 		return MonitorCheckResult{Status: "down", Latency: 0, Message: "blocked target: link-local/cloud-metadata addresses are not allowed"}, true
@@ -795,6 +1059,18 @@ func runMonitorCheck(monitor AssignedMonitor) (MonitorCheckResult, bool) {
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
 	case "network_device":
 		status, latency, msg := checkNetworkDevice(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "rabbitmq":
+		status, latency, msg := checkRabbitMQ(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "kafka":
+		status, latency, msg := checkKafka(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "mqtt":
+		status, latency, msg := checkMQTT(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "snmp":
+		status, latency, msg := checkSNMP(monitor.Target, monitor.Settings)
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
 	default:
 		return MonitorCheckResult{}, false
