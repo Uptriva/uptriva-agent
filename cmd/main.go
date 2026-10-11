@@ -57,7 +57,6 @@ type Config struct {
 	DisableRemoteCommands     bool     `json:"disable_remote_commands"`
 	EnableRemoteCommands      bool     `json:"enable_remote_commands"`
 	AllowExecScript           bool     `json:"allow_exec_script"`
-	DisableK8sDiscovery       bool     `json:"disable_k8s_discovery"`
 }
 
 func remoteCommandsEnabled(c *Config) bool {
@@ -866,7 +865,6 @@ func main() {
 	}
 
 	go startMonitorChecker(config.APIURL, config.Token)
-	go startK8sDiscovery(config)
 
 	if config.Port > 0 {
 		go func() {
