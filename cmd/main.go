@@ -33,13 +33,18 @@ var (
 )
 
 const (
-	DefaultAPIURL                    = "https://api.shxrk.systems"
-	DefaultDownloadURL               = "https://download.shxrk.systems"
+	DefaultAPIURL                    = "https://api.uptriva.com"
+	DefaultDownloadURL               = "https://download.uptriva.com"
+	LegacyAPIURL                     = "https://api.shxrk.systems"
+	LegacyDownloadURL                = "https://download.shxrk.systems"
 	MinInterval                      = 15
 	DefaultInterval                  = 30
 	DefaultAutoUpdateEnabled         = true
 	DefaultAutoUpdateIntervalMinutes = 30
 )
+
+var downloadBaseURLs = []string{DefaultDownloadURL, LegacyDownloadURL}
+var apiBaseURLs = []string{DefaultAPIURL, LegacyAPIURL}
 
 type Config struct {
 	APIURL                     string   `json:"api_url"`
@@ -87,6 +92,9 @@ func envFlagEnabled(name string) bool {
 }
 
 func configPath() string {
+	if p := strings.TrimSpace(os.Getenv("UPTRIVA_AGENT_CONFIG")); p != "" {
+		return p
+	}
 	if p := strings.TrimSpace(os.Getenv("SHXRK_AGENT_CONFIG")); p != "" {
 		return p
 	}
@@ -95,9 +103,23 @@ func configPath() string {
 	}
 	if runtime.GOOS == "darwin" {
 		home, _ := os.UserHomeDir()
-		return filepath.Join(home, ".shxrk", "agent_config.json")
+		newPath := filepath.Join(home, ".uptriva", "agent_config.json")
+		if _, err := os.Stat(newPath); err == nil {
+			return newPath
+		}
+		legacyPath := filepath.Join(home, ".shxrk", "agent_config.json")
+		if _, err := os.Stat(legacyPath); err == nil {
+			return legacyPath
+		}
+		return newPath
 	}
-	return "/etc/shxrk/agent_config.json"
+	if _, err := os.Stat("/etc/uptriva/agent_config.json"); err == nil {
+		return "/etc/uptriva/agent_config.json"
+	}
+	if _, err := os.Stat("/etc/shxrk/agent_config.json"); err == nil {
+		return "/etc/shxrk/agent_config.json"
+	}
+	return "/etc/uptriva/agent_config.json"
 }
 
 func saveConfig(config Config) error {
@@ -105,7 +127,13 @@ func saveConfig(config Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath(), b, 0600)
+	p := configPath()
+	if dir := filepath.Dir(p); dir != "." {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(p, b, 0600)
 }
 
 func loadConfig() (Config, error) {
@@ -261,31 +289,44 @@ func performHandshake(token string) (Config, error) {
 		},
 	}
 
-	req, err := http.NewRequest("POST", DefaultAPIURL+"/api/v1/uptime/agents/handshake", bytes.NewBuffer(b))
-	if err != nil {
-		return Config{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Agent-Signature", signature)
-	req.Header.Set("X-Agent-Timestamp", timestamp)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return Config{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return Config{}, fmt.Errorf("handshake failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
+	var lastErr error
 	var res struct {
 		AgentID string `json:"agent_id"`
 		Token   string `json:"token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-		return Config{}, err
+	apiURL := ""
+	for _, base := range apiBaseURLs {
+		req, err := http.NewRequest("POST", base+"/api/v1/uptime/agents/handshake", bytes.NewBuffer(b))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Agent-Signature", signature)
+		req.Header.Set("X-Agent-Timestamp", timestamp)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			lastErr = fmt.Errorf("handshake failed with status %d: %s", resp.StatusCode, string(body))
+			continue
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+			resp.Body.Close()
+			lastErr = err
+			continue
+		}
+		resp.Body.Close()
+		apiURL = base
+		break
+	}
+	if apiURL == "" {
+		return Config{}, lastErr
 	}
 
 	sessionToken := token
@@ -294,13 +335,33 @@ func performHandshake(token string) (Config, error) {
 	}
 
 	return Config{
-		APIURL:                    DefaultAPIURL,
+		APIURL:                    apiURL,
 		Token:                     sessionToken,
 		AgentID:                   res.AgentID,
 		Interval:                  DefaultInterval,
 		AutoUpdateEnabled:         DefaultAutoUpdateEnabled,
 		AutoUpdateIntervalMinutes: DefaultAutoUpdateIntervalMinutes,
 	}, nil
+}
+
+func probeAPIBase(base string) bool {
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Get(base + "/health")
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+func resolveAPIURL(stored string) string {
+	if stored != LegacyAPIURL {
+		return stored
+	}
+	if probeAPIBase(DefaultAPIURL) {
+		return DefaultAPIURL
+	}
+	return stored
 }
 
 type AgentManifest struct {
@@ -365,7 +426,7 @@ type PlatformAsset struct {
 	URL      string `json:"url"`
 }
 
-func fetchManifest(downloadURL string, betaChannel bool) (*AgentManifest, error) {
+func fetchManifestFrom(downloadURL string, betaChannel bool) (*AgentManifest, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	manifestPath := "/manifest"
 	if betaChannel {
@@ -387,6 +448,37 @@ func fetchManifest(downloadURL string, betaChannel bool) (*AgentManifest, error)
 		return nil, err
 	}
 	return &manifest, nil
+}
+
+func fetchManifest(betaChannel bool) (*AgentManifest, error) {
+	var lastErr error
+	for _, base := range downloadBaseURLs {
+		manifest, err := fetchManifestFrom(base, betaChannel)
+		if err == nil {
+			return manifest, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func downloadFile(assetURL string) (*http.Response, error) {
+	client := &http.Client{Timeout: 120 * time.Second}
+	var lastErr error
+	for _, base := range downloadBaseURLs {
+		resp, err := client.Get(base + assetURL)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("download returned %d", resp.StatusCode)
+			continue
+		}
+		return resp, nil
+	}
+	return nil, lastErr
 }
 
 func compareVersions(a, b string) int {
@@ -422,9 +514,9 @@ func getPlatformKey() string {
 
 func getBinaryPath() string {
 	if runtime.GOOS == "windows" {
-		return "C:\\Program Files\\ShxrkSystems\\shxrk-agent.exe"
+		return "C:\\Program Files\\Uptriva\\uptriva-agent.exe"
 	}
-	return "/usr/local/bin/shxrk-agent"
+	return "/usr/local/bin/uptriva-agent"
 }
 
 func getCurrentBinaryPath() string {
@@ -445,7 +537,7 @@ type UpdateResult struct {
 }
 
 func checkForUpdate(config Config) (*UpdateResult, error) {
-	manifest, err := fetchManifest(DefaultDownloadURL, config.BetaChannel)
+	manifest, err := fetchManifest(config.BetaChannel)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch manifest: %w", err)
 	}
@@ -484,20 +576,15 @@ func downloadAndInstallUpdate(manifest *AgentManifest) error {
 		return fmt.Errorf("no binary available for platform %s", platformKey)
 	}
 
-	downloadFullURL := DefaultDownloadURL + asset.URL
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Get(downloadFullURL)
+	resp, err := downloadFile(asset.URL)
 	if err != nil {
 		return fmt.Errorf("failed to download: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download returned %d", resp.StatusCode)
-	}
 
 	tmpPath := getCurrentBinaryPath() + ".new"
 	if runtime.GOOS == "windows" {
-		tmpPath = os.Getenv("TEMP") + "\\shxrk-agent.new.exe"
+		tmpPath = os.Getenv("TEMP") + "\\uptriva-agent.new.exe"
 	}
 
 	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
@@ -629,7 +716,7 @@ func confirmUpdate() {
 }
 
 func performUpdate(config *Config) bool {
-	manifest, err := fetchManifest(DefaultDownloadURL, config.BetaChannel)
+	manifest, err := fetchManifest(config.BetaChannel)
 	if err != nil {
 		fmt.Printf("[update] failed to fetch manifest: %v\n", err)
 		return false
@@ -647,7 +734,7 @@ func performUpdate(config *Config) bool {
 	if manifest.RequiresConsent && config.AcceptedPrivacyPolicy != manifest.PrivacyPolicyVersion {
 		fmt.Printf("[update] update to %s available but requires privacy policy consent (v%s)\n", manifest.Version, manifest.PrivacyPolicyVersion)
 		fmt.Printf("[update] review at %s\n", manifest.PrivacyPolicyURL)
-		fmt.Println("[update] run: shxrk-agent -accept-privacy-policy to consent and update")
+		fmt.Println("[update] run: uptriva-agent -accept-privacy-policy to consent and update")
 		return false
 	}
 
@@ -731,7 +818,7 @@ func main() {
 		if result.RequiresConsent {
 			fmt.Printf("Update available: %s -> %s\n", AgentVersion, result.NewVersion)
 			fmt.Printf("Privacy policy changed (v%s). Review: %s\n", result.PrivacyPolicyVersion, result.PrivacyPolicyURL)
-			fmt.Println("Run: shxrk-agent -accept-privacy-policy to consent and update")
+			fmt.Println("Run: uptriva-agent -accept-privacy-policy to consent and update")
 			os.Exit(0)
 		}
 		if result.NewVersion != "" {
@@ -751,7 +838,7 @@ func main() {
 		if *betaFlag {
 			config.BetaChannel = true
 		}
-		manifest, err := fetchManifest(DefaultDownloadURL, config.BetaChannel)
+		manifest, err := fetchManifest(config.BetaChannel)
 		if err != nil {
 			fmt.Printf("Error fetching manifest: %v\n", err)
 			os.Exit(1)
@@ -900,6 +987,14 @@ func main() {
 	if config.Interval < MinInterval {
 		config.Interval = MinInterval
 	}
+
+	if resolved := resolveAPIURL(config.APIURL); resolved != config.APIURL {
+		fmt.Printf("[agent] API endpoint migrated %s -> %s\n", config.APIURL, resolved)
+		config.APIURL = resolved
+		_ = saveConfig(config)
+	}
+
+	go maybeMigrateLegacyInstall()
 
 	if *betaFlag && !config.BetaChannel {
 		config.BetaChannel = true

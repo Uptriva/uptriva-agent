@@ -28,16 +28,17 @@ jobs:
         run: |
           mkdir -p dist/linux/amd64 dist/linux/arm64 dist/windows/amd64 dist/darwin/amd64 dist/darwin/arm64
           LDFLAGS="-s -w -X main.releasePublicKeyHex=${{ secrets.AGENT_RELEASE_PUBKEY }} -X main.AgentVersion=${VERSION}-beta"
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/linux/amd64/shxrk-agent ./cmd/
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/linux/arm64/shxrk-agent ./cmd/
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/windows/amd64/shxrk-agent.exe ./cmd/
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/darwin/amd64/shxrk-agent ./cmd/
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/darwin/arm64/shxrk-agent ./cmd/
-          cp dist/linux/amd64/shxrk-agent dist/linux/amd64/uptime-agent
-          cp dist/linux/arm64/shxrk-agent dist/linux/arm64/uptime-agent
-          cp dist/windows/amd64/shxrk-agent.exe dist/windows/amd64/uptime-agent.exe
-          cp dist/darwin/amd64/shxrk-agent dist/darwin/amd64/uptime-agent
-          cp dist/darwin/arm64/shxrk-agent dist/darwin/arm64/uptime-agent
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/linux/amd64/uptriva-agent ./cmd/
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/linux/arm64/uptriva-agent ./cmd/
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/windows/amd64/uptriva-agent.exe ./cmd/
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/darwin/amd64/uptriva-agent ./cmd/
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/darwin/arm64/uptriva-agent ./cmd/
+          for d in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            cp "dist/$d/uptriva-agent" "dist/$d/shxrk-agent"
+            cp "dist/$d/uptriva-agent" "dist/$d/uptime-agent"
+          done
+          cp dist/windows/amd64/uptriva-agent.exe dist/windows/amd64/shxrk-agent.exe
+          cp dist/windows/amd64/uptriva-agent.exe dist/windows/amd64/uptime-agent.exe
 
       - name: Generate Checksums and Metadata
         env:
@@ -65,6 +66,10 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           tar -czf release.tar.gz -C dist .
+          curl -X POST https://download.uptriva.com/upload/beta \
+            -H "Authorization: Bearer $DOWNLOAD_BETA_API_KEY" \
+            -F "file=@release.tar.gz" \
+            --fail --show-error --silent || \
           curl -X POST https://download.shxrk.systems/upload/beta \
             -H "Authorization: Bearer $DOWNLOAD_BETA_API_KEY" \
             -F "file=@release.tar.gz" \
