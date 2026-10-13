@@ -42,21 +42,29 @@ const (
 )
 
 type Config struct {
-	APIURL                    string   `json:"api_url"`
-	Token                     string   `json:"token"`
-	AgentID                   string   `json:"agent_id"`
-	Interval                  int      `json:"interval"`
-	Port                      int      `json:"port"`
-	AutoUpdateEnabled         bool     `json:"auto_update_enabled"`
-	AutoUpdateIntervalMinutes int      `json:"auto_update_interval_minutes"`
-	AcceptedPrivacyPolicy     string   `json:"accepted_privacy_policy"`
-	BetaChannel               bool     `json:"beta_channel"`
-	WatchServices             []string `json:"watch_services"`
-	SecurityEventsEnabled     bool     `json:"security_events_enabled"`
-	PackageMonitoringEnabled  bool     `json:"package_monitoring_enabled"`
-	DisableRemoteCommands     bool     `json:"disable_remote_commands"`
-	EnableRemoteCommands      bool     `json:"enable_remote_commands"`
-	AllowExecScript           bool     `json:"allow_exec_script"`
+	APIURL                     string   `json:"api_url"`
+	Token                      string   `json:"token"`
+	AgentID                    string   `json:"agent_id"`
+	Interval                   int      `json:"interval"`
+	Port                       int      `json:"port"`
+	AutoUpdateEnabled          bool     `json:"auto_update_enabled"`
+	AutoUpdateIntervalMinutes  int      `json:"auto_update_interval_minutes"`
+	AcceptedPrivacyPolicy      string   `json:"accepted_privacy_policy"`
+	BetaChannel                bool     `json:"beta_channel"`
+	WatchServices              []string `json:"watch_services"`
+	WatchFiles                 []string `json:"watch_files"`
+	SecurityEventsEnabled      bool     `json:"security_events_enabled"`
+	PackageMonitoringEnabled   bool     `json:"package_monitoring_enabled"`
+	PortWatchEnabled           bool     `json:"port_watch_enabled"`
+	IntegrityMonitoringEnabled bool     `json:"integrity_monitoring_enabled"`
+	KernelEventsEnabled        bool     `json:"kernel_events_enabled"`
+	CertWatchEnabled           bool     `json:"cert_watch_enabled"`
+	SystemPostureEnabled       bool     `json:"system_posture_enabled"`
+	ContainerWatchEnabled      bool     `json:"container_watch_enabled"`
+	WatchCerts                 []string `json:"watch_certs"`
+	DisableRemoteCommands      bool     `json:"disable_remote_commands"`
+	EnableRemoteCommands       bool     `json:"enable_remote_commands"`
+	AllowExecScript            bool     `json:"allow_exec_script"`
 }
 
 func remoteCommandsEnabled(c *Config) bool {
@@ -669,6 +677,18 @@ func main() {
 	noSecurityEventsFlag := flag.Bool("no-security-events", false, "")
 	pkgMonitoringFlag := flag.Bool("package-monitoring", false, "")
 	noPkgMonitoringFlag := flag.Bool("no-package-monitoring", false, "")
+	portWatchFlag := flag.Bool("port-watch", false, "")
+	noPortWatchFlag := flag.Bool("no-port-watch", false, "")
+	integrityFlag := flag.Bool("integrity-monitoring", false, "")
+	noIntegrityFlag := flag.Bool("no-integrity-monitoring", false, "")
+	kernelEventsFlag := flag.Bool("kernel-events", false, "")
+	noKernelEventsFlag := flag.Bool("no-kernel-events", false, "")
+	certWatchFlag := flag.Bool("cert-watch", false, "")
+	noCertWatchFlag := flag.Bool("no-cert-watch", false, "")
+	systemPostureFlag := flag.Bool("system-posture", false, "")
+	noSystemPostureFlag := flag.Bool("no-system-posture", false, "")
+	containerWatchFlag := flag.Bool("container-watch", false, "")
+	noContainerWatchFlag := flag.Bool("no-container-watch", false, "")
 	disableCommandsFlag := flag.Bool("no-remote-commands", false, "")
 	enableCommandsFlag := flag.Bool("remote-commands", false, "")
 	allowExecFlag := flag.Bool("allow-exec-script", false, "")
@@ -809,7 +829,7 @@ func main() {
 			os.Exit(1)
 		}
 		config = cfg
-		if *securityEventsFlag || *noSecurityEventsFlag || *pkgMonitoringFlag || *noPkgMonitoringFlag || *disableCommandsFlag || *enableCommandsFlag || *allowExecFlag {
+		if *securityEventsFlag || *noSecurityEventsFlag || *pkgMonitoringFlag || *noPkgMonitoringFlag || *disableCommandsFlag || *enableCommandsFlag || *allowExecFlag || *portWatchFlag || *noPortWatchFlag || *integrityFlag || *noIntegrityFlag || *kernelEventsFlag || *noKernelEventsFlag || *certWatchFlag || *noCertWatchFlag || *systemPostureFlag || *noSystemPostureFlag || *containerWatchFlag || *noContainerWatchFlag {
 			if *securityEventsFlag {
 				config.SecurityEventsEnabled = true
 			}
@@ -821,6 +841,42 @@ func main() {
 			}
 			if *noPkgMonitoringFlag {
 				config.PackageMonitoringEnabled = false
+			}
+			if *portWatchFlag {
+				config.PortWatchEnabled = true
+			}
+			if *noPortWatchFlag {
+				config.PortWatchEnabled = false
+			}
+			if *integrityFlag {
+				config.IntegrityMonitoringEnabled = true
+			}
+			if *noIntegrityFlag {
+				config.IntegrityMonitoringEnabled = false
+			}
+			if *kernelEventsFlag {
+				config.KernelEventsEnabled = true
+			}
+			if *noKernelEventsFlag {
+				config.KernelEventsEnabled = false
+			}
+			if *certWatchFlag {
+				config.CertWatchEnabled = true
+			}
+			if *noCertWatchFlag {
+				config.CertWatchEnabled = false
+			}
+			if *systemPostureFlag {
+				config.SystemPostureEnabled = true
+			}
+			if *noSystemPostureFlag {
+				config.SystemPostureEnabled = false
+			}
+			if *containerWatchFlag {
+				config.ContainerWatchEnabled = true
+			}
+			if *noContainerWatchFlag {
+				config.ContainerWatchEnabled = false
 			}
 			if *disableCommandsFlag {
 				config.DisableRemoteCommands = true
@@ -836,8 +892,8 @@ func main() {
 			if err := saveConfig(config); err != nil {
 				fmt.Printf("Error saving config: %v\n", err)
 			}
-			fmt.Printf("[agent] addons: security-events=%v package-monitoring=%v remote-commands=%v exec-script=%v\n",
-				config.SecurityEventsEnabled, config.PackageMonitoringEnabled, remoteCommandsEnabled(&config), execScriptAllowed(&config))
+			fmt.Printf("[agent] addons: security-events=%v package-monitoring=%v port-watch=%v integrity-monitoring=%v kernel-events=%v cert-watch=%v system-posture=%v container-watch=%v remote-commands=%v exec-script=%v\n",
+				config.SecurityEventsEnabled, config.PackageMonitoringEnabled, config.PortWatchEnabled, config.IntegrityMonitoringEnabled, config.KernelEventsEnabled, config.CertWatchEnabled, config.SystemPostureEnabled, config.ContainerWatchEnabled, remoteCommandsEnabled(&config), execScriptAllowed(&config))
 		}
 	}
 

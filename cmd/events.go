@@ -148,6 +148,24 @@ func collectAgentEvents(cfg Config) []agentEventItem {
 	if cfg.PackageMonitoringEnabled || envFlagEnabled("AGENT_PKG_MONITORING") {
 		events = append(events, collectPackageEvents()...)
 	}
+	if cfg.PortWatchEnabled || envFlagEnabled("AGENT_PORT_WATCH") {
+		events = append(events, collectPortEvents()...)
+	}
+	if cfg.IntegrityMonitoringEnabled || envFlagEnabled("AGENT_INTEGRITY_MON") {
+		events = append(events, collectIntegrityEvents(cfg)...)
+	}
+	if cfg.KernelEventsEnabled || envFlagEnabled("AGENT_KERNEL_EVENTS") {
+		events = append(events, collectKernelEvents()...)
+	}
+	if cfg.CertWatchEnabled || envFlagEnabled("AGENT_CERT_WATCH") {
+		events = append(events, collectCertEvents(cfg)...)
+	}
+	if cfg.SystemPostureEnabled || envFlagEnabled("AGENT_SYSTEM_POSTURE") {
+		events = append(events, collectPostureEvents()...)
+	}
+	if cfg.ContainerWatchEnabled || envFlagEnabled("AGENT_CONTAINER_WATCH") {
+		events = append(events, collectContainerEvents()...)
+	}
 	return events
 }
 

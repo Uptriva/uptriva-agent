@@ -315,6 +315,41 @@ func applyFeatureFlags(cfg *Config, params map[string]string) string {
 		cfg.PackageMonitoringEnabled = truthy(v)
 		applied = append(applied, "package_monitoring="+strconv.FormatBool(cfg.PackageMonitoringEnabled))
 	}
+	if v, ok := params["port_watch"]; ok {
+		cfg.PortWatchEnabled = truthy(v)
+		applied = append(applied, "port_watch="+strconv.FormatBool(cfg.PortWatchEnabled))
+	}
+	if v, ok := params["integrity_monitoring"]; ok {
+		cfg.IntegrityMonitoringEnabled = truthy(v)
+		applied = append(applied, "integrity_monitoring="+strconv.FormatBool(cfg.IntegrityMonitoringEnabled))
+	}
+	if v, ok := params["kernel_events"]; ok {
+		cfg.KernelEventsEnabled = truthy(v)
+		applied = append(applied, "kernel_events="+strconv.FormatBool(cfg.KernelEventsEnabled))
+	}
+	if v, ok := params["cert_watch"]; ok {
+		cfg.CertWatchEnabled = truthy(v)
+		applied = append(applied, "cert_watch="+strconv.FormatBool(cfg.CertWatchEnabled))
+	}
+	if v, ok := params["system_posture"]; ok {
+		cfg.SystemPostureEnabled = truthy(v)
+		applied = append(applied, "system_posture="+strconv.FormatBool(cfg.SystemPostureEnabled))
+	}
+	if v, ok := params["container_watch"]; ok {
+		cfg.ContainerWatchEnabled = truthy(v)
+		applied = append(applied, "container_watch="+strconv.FormatBool(cfg.ContainerWatchEnabled))
+	}
+	if v, ok := params["watch_files"]; ok {
+		var files []string
+		for _, f := range strings.Split(v, ",") {
+			f = strings.TrimSpace(f)
+			if f != "" && strings.HasPrefix(f, "/") && len(f) < 300 {
+				files = append(files, f)
+			}
+		}
+		cfg.WatchFiles = files
+		applied = append(applied, "watch_files="+strconv.Itoa(len(files)))
+	}
 	if len(applied) == 0 {
 		return "ERROR: no known flags in params"
 	}
