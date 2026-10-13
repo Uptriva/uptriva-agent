@@ -33,12 +33,6 @@ jobs:
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/windows/amd64/uptriva-agent.exe ./cmd/
           CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/darwin/amd64/uptriva-agent ./cmd/
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/darwin/arm64/uptriva-agent ./cmd/
-          for d in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-            cp "dist/$d/uptriva-agent" "dist/$d/shxrk-agent"
-            cp "dist/$d/uptriva-agent" "dist/$d/uptime-agent"
-          done
-          cp dist/windows/amd64/uptriva-agent.exe dist/windows/amd64/shxrk-agent.exe
-          cp dist/windows/amd64/uptriva-agent.exe dist/windows/amd64/uptime-agent.exe
 
       - name: Generate Checksums and Metadata
         env:
