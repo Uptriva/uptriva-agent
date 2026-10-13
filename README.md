@@ -1,6 +1,6 @@
-# ShxrkSystems Monitoring Agent
+# Uptriva Monitoring Agent
 
-Open source monitoring agent for ShxrkSystems Uptime. Collects system metrics (CPU, RAM, Disk, Network) and sends them to the ShxrkSystems API.
+Open source monitoring agent for Uptriva. Collects system metrics (CPU, RAM, Disk, Network) and sends them to the Uptriva API.
 
 ## Features
 
@@ -24,21 +24,21 @@ This agent is open source for transparency. You can review the code to verify:
 ### Linux/macOS
 
 ```bash
-wget https://download.shxrk.systems/agents/linux/amd64/shxrk-agent
-chmod +x shxrk-agent
-sudo mv shxrk-agent /usr/local/bin/shxrk-agent
+wget https://download.uptriva.com/agents/linux/amd64/uptriva-agent
+chmod +x uptriva-agent
+sudo mv uptriva-agent /usr/local/bin/uptriva-agent
 ```
 
 ### Windows
 
-Download the latest binary from [Releases](https://github.com/shxrksystems/shxrk-agent/releases) and place it in your PATH.
+Download the latest binary from [Releases](https://github.com/uptriva/uptriva-agent/releases) and place it in your PATH.
 
 ## Usage
 
 ### First-time setup
 
 ```bash
-shxrk-agent --token YOUR_TOKEN --api https://api.shxrk.systems
+uptriva-agent --token YOUR_TOKEN --api https://api.uptriva.com
 ```
 
 The agent will perform a handshake with the API and store an encrypted configuration file.
@@ -46,7 +46,7 @@ The agent will perform a handshake with the API and store an encrypted configura
 ### Running
 
 ```bash
-shxrk-agent
+uptriva-agent
 ```
 
 The agent will read the encrypted configuration and start sending metrics.
@@ -54,7 +54,7 @@ The agent will read the encrypted configuration and start sending metrics.
 ### Optional metrics endpoint
 
 ```bash
-shxrk-agent --token YOUR_TOKEN --api https://api.shxrk.systems --port 8080
+uptriva-agent --token YOUR_TOKEN --api https://api.uptriva.com --port 8080
 ```
 
 This starts a local metrics endpoint on `http://127.0.0.1:8080/metrics` (protected by API key).
@@ -65,20 +65,20 @@ The agent stores configuration in `agent_config.json` in its working directory.
 
 ### Linux / macOS (installed via setup script)
 
-- Config file: `/etc/shxrk/agent_config.json`
-- Binary: `/usr/local/bin/shxrk-agent`
-- Working directory: `/etc/shxrk`
+- Config file: `/etc/uptriva/agent_config.json`
+- Binary: `/usr/local/bin/uptriva-agent`
+- Working directory: `/etc/uptriva`
 
 ### Windows
 
-- Default binary: `C:\Program Files\ShxrkSystems\shxrk-agent.exe`
+- Default binary: `C:\Program Files\Uptriva\uptriva-agent.exe`
 - Config file: `agent_config.json` in the working directory from which the agent is started
 
 ### Config fields
 
 ```json
 {
-  "api_url": "https://api.shxrk.systems",
+  "api_url": "https://api.uptriva.com",
   "token": "...",
   "agent_id": "...",
   "interval": 30,
@@ -104,13 +104,13 @@ The agent stores configuration in `agent_config.json` in its working directory.
 Toggles can also be set via CLI flags (persisted to the config) or environment variables:
 
 ```bash
-shxrk-agent --security-events --package-monitoring   # enable
-shxrk-agent --no-security-events                     # disable
-shxrk-agent --no-remote-commands                     # disable remote exec
+uptriva-agent --security-events --package-monitoring   # enable
+uptriva-agent --no-security-events                     # disable
+uptriva-agent --no-remote-commands                     # disable remote exec
 ```
 
 ```bash
-AGENT_SECURITY_EVENTS=true AGENT_PKG_MONITORING=true shxrk-agent
+AGENT_SECURITY_EVENTS=true AGENT_PKG_MONITORING=true uptriva-agent
 ```
 
 To avoid exposing the token in the process list, `AGENT_TOKEN` can be used instead of `--token`.
@@ -118,7 +118,7 @@ To avoid exposing the token in the process list, `AGENT_TOKEN` can be used inste
 After editing the config, restart the agent:
 
 ```bash
-sudo systemctl restart shxrk-agent
+sudo systemctl restart uptriva-agent
 ```
 
 ## Metrics Collected
@@ -133,7 +133,7 @@ sudo systemctl restart shxrk-agent
 ## Building from source
 
 ```bash
-go build -o shxrk-agent cmd/main.go
+go build -o uptriva-agent cmd/main.go
 ```
 
 ## License
