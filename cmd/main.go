@@ -66,6 +66,7 @@ type Config struct {
 	CertWatchEnabled           bool     `json:"cert_watch_enabled"`
 	SystemPostureEnabled       bool     `json:"system_posture_enabled"`
 	ContainerWatchEnabled      bool     `json:"container_watch_enabled"`
+	LogWatchEnabled            bool     `json:"log_watch_enabled"`
 	WatchCerts                 []string `json:"watch_certs"`
 	DisableRemoteCommands      bool     `json:"disable_remote_commands"`
 	EnableRemoteCommands       bool     `json:"enable_remote_commands"`
@@ -776,6 +777,8 @@ func main() {
 	noSystemPostureFlag := flag.Bool("no-system-posture", false, "")
 	containerWatchFlag := flag.Bool("container-watch", false, "")
 	noContainerWatchFlag := flag.Bool("no-container-watch", false, "")
+	logWatchFlag := flag.Bool("log-watch", false, "")
+	noLogWatchFlag := flag.Bool("no-log-watch", false, "")
 	disableCommandsFlag := flag.Bool("no-remote-commands", false, "")
 	enableCommandsFlag := flag.Bool("remote-commands", false, "")
 	allowExecFlag := flag.Bool("allow-exec-script", false, "")
@@ -916,7 +919,7 @@ func main() {
 			os.Exit(1)
 		}
 		config = cfg
-		if *securityEventsFlag || *noSecurityEventsFlag || *pkgMonitoringFlag || *noPkgMonitoringFlag || *disableCommandsFlag || *enableCommandsFlag || *allowExecFlag || *portWatchFlag || *noPortWatchFlag || *integrityFlag || *noIntegrityFlag || *kernelEventsFlag || *noKernelEventsFlag || *certWatchFlag || *noCertWatchFlag || *systemPostureFlag || *noSystemPostureFlag || *containerWatchFlag || *noContainerWatchFlag {
+		if *securityEventsFlag || *noSecurityEventsFlag || *pkgMonitoringFlag || *noPkgMonitoringFlag || *disableCommandsFlag || *enableCommandsFlag || *allowExecFlag || *portWatchFlag || *noPortWatchFlag || *integrityFlag || *noIntegrityFlag || *kernelEventsFlag || *noKernelEventsFlag || *certWatchFlag || *noCertWatchFlag || *systemPostureFlag || *noSystemPostureFlag || *containerWatchFlag || *noContainerWatchFlag || *logWatchFlag || *noLogWatchFlag {
 			if *securityEventsFlag {
 				config.SecurityEventsEnabled = true
 			}
@@ -965,6 +968,12 @@ func main() {
 			if *noContainerWatchFlag {
 				config.ContainerWatchEnabled = false
 			}
+			if *logWatchFlag {
+				config.LogWatchEnabled = true
+			}
+			if *noLogWatchFlag {
+				config.LogWatchEnabled = false
+			}
 			if *disableCommandsFlag {
 				config.DisableRemoteCommands = true
 				config.EnableRemoteCommands = false
@@ -979,8 +988,8 @@ func main() {
 			if err := saveConfig(config); err != nil {
 				fmt.Printf("Error saving config: %v\n", err)
 			}
-			fmt.Printf("[agent] addons: security-events=%v package-monitoring=%v port-watch=%v integrity-monitoring=%v kernel-events=%v cert-watch=%v system-posture=%v container-watch=%v remote-commands=%v exec-script=%v\n",
-				config.SecurityEventsEnabled, config.PackageMonitoringEnabled, config.PortWatchEnabled, config.IntegrityMonitoringEnabled, config.KernelEventsEnabled, config.CertWatchEnabled, config.SystemPostureEnabled, config.ContainerWatchEnabled, remoteCommandsEnabled(&config), execScriptAllowed(&config))
+			fmt.Printf("[agent] addons: security-events=%v package-monitoring=%v port-watch=%v integrity-monitoring=%v kernel-events=%v cert-watch=%v system-posture=%v container-watch=%v log-watch=%v remote-commands=%v exec-script=%v\n",
+				config.SecurityEventsEnabled, config.PackageMonitoringEnabled, config.PortWatchEnabled, config.IntegrityMonitoringEnabled, config.KernelEventsEnabled, config.CertWatchEnabled, config.SystemPostureEnabled, config.ContainerWatchEnabled, config.LogWatchEnabled, remoteCommandsEnabled(&config), execScriptAllowed(&config))
 		}
 	}
 
@@ -1016,6 +1025,10 @@ func main() {
 	}
 
 	go startMonitorChecker(config.APIURL, config.Token)
+
+	if config.LogWatchEnabled || envFlagEnabled("AGENT_LOG_WATCH") {
+		go startLogWatcher(config)
+	}
 
 	if config.Port > 0 {
 		go func() {

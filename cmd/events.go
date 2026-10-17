@@ -166,6 +166,9 @@ func collectAgentEvents(cfg Config) []agentEventItem {
 	if cfg.ContainerWatchEnabled || envFlagEnabled("AGENT_CONTAINER_WATCH") {
 		events = append(events, collectContainerEvents()...)
 	}
+	if cfg.LogWatchEnabled || envFlagEnabled("AGENT_LOG_WATCH") {
+		events = append(events, collectLogWatchEvents(cfg)...)
+	}
 	return events
 }
 
