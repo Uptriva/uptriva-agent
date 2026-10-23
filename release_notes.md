@@ -1,4 +1,4 @@
-## v1.5.7
+## v1.5.8
 
 - Kubernetes workload monitoring: kube_deploy checks now accept a `kind` setting (`deployment`, `statefulset`, `daemonset`), so StatefulSets (databases, KeyDB) and DaemonSets can be monitored for replica readiness instead of relying on pod IPs
 
