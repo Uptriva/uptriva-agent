@@ -1,3 +1,8 @@
+## v1.5.9
+
+- kube_deploy checks now report per-pod metrics (name, phase, ready containers, restarts, node) so the dashboard can render a full workload view with replica counts and a pod table
+
+
 ## v1.5.8
 
 - Kubernetes workload monitoring: kube_deploy checks now accept a `kind` setting (`deployment`, `statefulset`, `daemonset`), so StatefulSets (databases, KeyDB) and DaemonSets can be monitored for replica readiness instead of relying on pod IPs
