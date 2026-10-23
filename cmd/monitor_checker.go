@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/smtp"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -559,6 +560,10 @@ type infraSettings struct {
 	Username           string `json:"username"`
 	Password           string `json:"password"`
 	OID                string `json:"oid"`
+	Namespace          string `json:"namespace"`
+	Deployment         string `json:"deployment"`
+	MinReady           int    `json:"min_ready"`
+	Kubeconfig         string `json:"kubeconfig"`
 }
 
 func checkContainerRuntime(binary, target string, settings json.RawMessage) (string, int, string) {
@@ -643,6 +648,66 @@ func checkKubernetes(target string, settings json.RawMessage) (string, int, stri
 	var s infraSettings
 	json.Unmarshal(settings, &s)
 	return checkInfraHTTP(target, s, "6443", "/readyz", "Authorization", "Bearer ")
+}
+
+func checkKubeDeployment(target string, settings json.RawMessage) (string, int, string) {
+	var s infraSettings
+	json.Unmarshal(settings, &s)
+	ns := strings.TrimSpace(s.Namespace)
+	if ns == "" {
+		ns = "default"
+	}
+	name := strings.TrimSpace(s.Deployment)
+	if name == "" {
+		name = strings.TrimSpace(target)
+	}
+	if !validExecTarget(name) || !validExecTarget(ns) {
+		return "down", 0, "invalid deployment or namespace name"
+	}
+	kubeconfig := strings.TrimSpace(s.Kubeconfig)
+	if kubeconfig == "" {
+		for _, p := range []string{"/etc/rancher/k3s/k3s.yaml", os.Getenv("HOME") + "/.kube/config", "/root/.kube/config"} {
+			if _, err := os.Stat(p); err == nil {
+				kubeconfig = p
+				break
+			}
+		}
+	}
+	if kubeconfig == "" {
+		return "down", 0, "no kubeconfig found on agent host"
+	}
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "kubectl", "--kubeconfig", kubeconfig, "-n", ns, "get", "deployment", name, "-o", "json").CombinedOutput()
+	latency := int(time.Since(start).Milliseconds())
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if len(msg) > 160 {
+			msg = msg[:160]
+		}
+		return "down", latency, "kubectl failed: " + msg
+	}
+	var dep struct {
+		Spec struct {
+			Replicas int `json:"replicas"`
+		} `json:"spec"`
+		Status struct {
+			ReadyReplicas     int `json:"readyReplicas"`
+			AvailableReplicas int `json:"availableReplicas"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(out, &dep); err != nil {
+		return "down", latency, "could not parse deployment status"
+	}
+	want := dep.Spec.Replicas
+	if s.MinReady > 0 {
+		want = s.MinReady
+	}
+	if want > 0 && dep.Status.ReadyReplicas >= want {
+		return "up", latency, fmt.Sprintf("%d/%d replicas ready", dep.Status.ReadyReplicas, dep.Spec.Replicas)
+	}
+	return "down", latency, fmt.Sprintf("%d/%d replicas ready (want %d)", dep.Status.ReadyReplicas, dep.Spec.Replicas, want)
 }
 
 func checkProxmox(target string, settings json.RawMessage) (string, int, string) {
@@ -1011,7 +1076,7 @@ var agentSupportedCheckTypes = []string{
 	"ping", "icmp", "dns", "udp", "ssl", "domain", "redis",
 	"game_server", "lavalink", "ftp", "sftp", "ssh",
 	"docker", "podman", "docker_swarm", "vmware", "ceph",
-	"kubernetes", "proxmox", "network_device",
+	"kubernetes", "kube_deploy", "proxmox", "network_device",
 	"rabbitmq", "kafka", "mqtt", "snmp",
 }
 
@@ -1098,6 +1163,9 @@ func runMonitorCheck(monitor AssignedMonitor) (MonitorCheckResult, bool) {
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
 	case "kubernetes":
 		status, latency, msg := checkKubernetes(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "kube_deploy":
+		status, latency, msg := checkKubeDeployment(monitor.Target, monitor.Settings)
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
 	case "proxmox":
 		status, latency, msg := checkProxmox(monitor.Target, monitor.Settings)
