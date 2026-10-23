@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -20,6 +21,10 @@ var defaultIntegrityWatchFiles = []string{
 	"/etc/ssh/sshd_config",
 	"/etc/crontab",
 	"/root/.ssh/authorized_keys",
+}
+
+var defaultIntegrityWatchGlobs = []string{
+	"/home/*/.ssh/authorized_keys",
 }
 
 var (
@@ -153,6 +158,11 @@ func collectIntegrityEvents(cfg Config) []agentEventItem {
 
 	watchSet := append([]string{}, defaultIntegrityWatchFiles...)
 	watchSet = append(watchSet, cfg.WatchFiles...)
+	for _, glob := range defaultIntegrityWatchGlobs {
+		if matches, err := filepath.Glob(glob); err == nil {
+			watchSet = append(watchSet, matches...)
+		}
+	}
 
 	hashes := map[string]string{}
 	for _, p := range watchSet {
