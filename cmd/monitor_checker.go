@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -651,7 +652,7 @@ func checkKubernetes(target string, settings json.RawMessage) (string, int, stri
 	return checkInfraHTTP(target, s, "6443", "/readyz", "Authorization", "Bearer ")
 }
 
-func checkKubeDeployment(target string, settings json.RawMessage) (string, int, string) {
+func checkKubeDeployment(target string, settings json.RawMessage) (string, int, string, map[string]interface{}) {
 	var s infraSettings
 	json.Unmarshal(settings, &s)
 	kind := strings.ToLower(strings.TrimSpace(s.Kind))
@@ -659,7 +660,7 @@ func checkKubeDeployment(target string, settings json.RawMessage) (string, int, 
 		kind = "deployment"
 	}
 	if kind != "deployment" && kind != "statefulset" && kind != "daemonset" {
-		return "down", 0, "unsupported workload kind: " + kind
+		return "down", 0, "unsupported workload kind: " + kind, nil
 	}
 	ns := strings.TrimSpace(s.Namespace)
 	if ns == "" {
@@ -670,7 +671,7 @@ func checkKubeDeployment(target string, settings json.RawMessage) (string, int, 
 		name = strings.TrimSpace(target)
 	}
 	if !validExecTarget(name) || !validExecTarget(ns) {
-		return "down", 0, "invalid workload or namespace name"
+		return "down", 0, "invalid workload or namespace name", nil
 	}
 	kubeconfig := strings.TrimSpace(s.Kubeconfig)
 	if kubeconfig == "" {
@@ -682,7 +683,7 @@ func checkKubeDeployment(target string, settings json.RawMessage) (string, int, 
 		}
 	}
 	if kubeconfig == "" {
-		return "down", 0, "no kubeconfig found on agent host"
+		return "down", 0, "no kubeconfig found on agent host", nil
 	}
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -694,11 +695,12 @@ func checkKubeDeployment(target string, settings json.RawMessage) (string, int, 
 		if len(msg) > 160 {
 			msg = msg[:160]
 		}
-		return "down", latency, "kubectl failed: " + msg
+		return "down", latency, "kubectl failed: " + msg, nil
 	}
 	var wl struct {
 		Spec struct {
-			Replicas int `json:"replicas"`
+			Replicas int                    `json:"replicas"`
+			Selector map[string]interface{} `json:"selector"`
 		} `json:"spec"`
 		Status struct {
 			ReadyReplicas          int `json:"readyReplicas"`
@@ -708,7 +710,7 @@ func checkKubeDeployment(target string, settings json.RawMessage) (string, int, 
 		} `json:"status"`
 	}
 	if err := json.Unmarshal(out, &wl); err != nil {
-		return "down", latency, "could not parse workload status"
+		return "down", latency, "could not parse workload status", nil
 	}
 	desired := wl.Spec.Replicas
 	ready := wl.Status.ReadyReplicas
@@ -716,14 +718,96 @@ func checkKubeDeployment(target string, settings json.RawMessage) (string, int, 
 		desired = wl.Status.DesiredNumberScheduled
 		ready = wl.Status.NumberReady
 	}
+	metrics := map[string]interface{}{
+		"kind":      kind,
+		"workload":  name,
+		"namespace": ns,
+		"desired":   desired,
+		"ready":     ready,
+	}
+	if sel := kubeSelectorString(wl.Spec.Selector); sel != "" {
+		pods := kubeListPods(kubeconfig, ns, sel)
+		if len(pods) > 0 {
+			metrics["pods"] = pods
+		}
+	}
 	want := desired
 	if s.MinReady > 0 {
 		want = s.MinReady
 	}
 	if want > 0 && ready >= want {
-		return "up", latency, fmt.Sprintf("%s %d/%d replicas ready", kind, ready, desired)
+		return "up", latency, fmt.Sprintf("%s %d/%d replicas ready", kind, ready, desired), metrics
 	}
-	return "down", latency, fmt.Sprintf("%s %d/%d replicas ready (want %d)", kind, ready, desired, want)
+	return "down", latency, fmt.Sprintf("%s %d/%d replicas ready (want %d)", kind, ready, desired, want), metrics
+}
+
+func kubeSelectorString(selector map[string]interface{}) string {
+	ml, _ := selector["matchLabels"].(map[string]interface{})
+	if len(ml) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(ml))
+	for k := range ml {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		v, _ := ml[k].(string)
+		if validExecTarget(k) && validExecTarget(v) {
+			parts = append(parts, k+"="+v)
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
+func kubeListPods(kubeconfig, ns, selector string) []map[string]interface{} {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "kubectl", "--kubeconfig", kubeconfig, "-n", ns, "get", "pods", "-l", selector, "-o", "json").CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Spec struct {
+				NodeName string `json:"nodeName"`
+			} `json:"spec"`
+			Status struct {
+				Phase             string `json:"phase"`
+				ContainerStatuses []struct {
+					Ready        bool `json:"ready"`
+					RestartCount int  `json:"restartCount"`
+				} `json:"containerStatuses"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(out, &list); err != nil {
+		return nil
+	}
+	pods := make([]map[string]interface{}, 0, len(list.Items))
+	for _, p := range list.Items {
+		readyCount := 0
+		restarts := 0
+		for _, cs := range p.Status.ContainerStatuses {
+			if cs.Ready {
+				readyCount++
+			}
+			restarts += cs.RestartCount
+		}
+		pods = append(pods, map[string]interface{}{
+			"name":          p.Metadata.Name,
+			"phase":         p.Status.Phase,
+			"ready":         fmt.Sprintf("%d/%d", readyCount, len(p.Status.ContainerStatuses)),
+			"restarts":      restarts,
+			"node":          p.Spec.NodeName,
+			"container_set": len(p.Status.ContainerStatuses),
+		})
+	}
+	return pods
 }
 
 func checkProxmox(target string, settings json.RawMessage) (string, int, string) {
@@ -1181,8 +1265,8 @@ func runMonitorCheck(monitor AssignedMonitor) (MonitorCheckResult, bool) {
 		status, latency, msg := checkKubernetes(monitor.Target, monitor.Settings)
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
 	case "kube_deploy":
-		status, latency, msg := checkKubeDeployment(monitor.Target, monitor.Settings)
-		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+		status, latency, msg, metrics := checkKubeDeployment(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg, Metrics: metrics}, true
 	case "proxmox":
 		status, latency, msg := checkProxmox(monitor.Target, monitor.Settings)
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
