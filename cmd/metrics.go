@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -270,6 +272,218 @@ func getUptime() uint64 {
 		return uptime
 	}
 	return 0
+}
+
+type CPUBreakdown struct {
+	User   float64 `json:"user"`
+	System float64 `json:"system"`
+	IOWait float64 `json:"iowait"`
+	Steal  float64 `json:"steal"`
+	Idle   float64 `json:"idle"`
+}
+
+func getCPUBreakdown() *CPUBreakdown {
+	times, err := cpu.Times(false)
+	if err != nil || len(times) == 0 {
+		return nil
+	}
+	t := times[0]
+	total := t.User + t.System + t.Idle + t.Iowait + t.Steal + t.Nice + t.Irq + t.Softirq + t.Guest + t.GuestNice
+	if total <= 0 {
+		return nil
+	}
+	return &CPUBreakdown{
+		User:   t.User / total * 100,
+		System: t.System / total * 100,
+		IOWait: t.Iowait / total * 100,
+		Steal:  t.Steal / total * 100,
+		Idle:   t.Idle / total * 100,
+	}
+}
+
+type DiskIORate struct {
+	Device        string `json:"device"`
+	ReadBytesSec  int64  `json:"read_bytes_sec"`
+	WriteBytesSec int64  `json:"write_bytes_sec"`
+}
+
+var (
+	prevDiskIO   map[string][2]uint64
+	prevDiskIOTs time.Time
+	prevDiskIOMu sync.Mutex
+)
+
+func getDiskIORates() []DiskIORate {
+	counters, err := disk.IOCounters()
+	if err != nil || len(counters) == 0 {
+		return nil
+	}
+	now := time.Now()
+	prevDiskIOMu.Lock()
+	defer prevDiskIOMu.Unlock()
+
+	elapsed := now.Sub(prevDiskIOTs).Seconds()
+	var rates []DiskIORate
+	for name, c := range counters {
+		prev, ok := prevDiskIO[name]
+		if !ok || prevDiskIO == nil || elapsed <= 0 {
+			continue
+		}
+		readDelta := int64(0)
+		writeDelta := int64(0)
+		if c.ReadBytes >= prev[0] {
+			readDelta = int64(float64(c.ReadBytes-prev[0]) / elapsed)
+		}
+		if c.WriteBytes >= prev[1] {
+			writeDelta = int64(float64(c.WriteBytes-prev[1]) / elapsed)
+		}
+		rates = append(rates, DiskIORate{Device: name, ReadBytesSec: readDelta, WriteBytesSec: writeDelta})
+	}
+	next := make(map[string][2]uint64, len(counters))
+	for name, c := range counters {
+		next[name] = [2]uint64{c.ReadBytes, c.WriteBytes}
+	}
+	prevDiskIO = next
+	prevDiskIOTs = now
+	return rates
+}
+
+type ListenPort struct {
+	Proto   string `json:"proto"`
+	Address string `json:"address"`
+	Port    uint32 `json:"port"`
+	Process string `json:"process,omitempty"`
+	Pid     int32  `json:"pid,omitempty"`
+}
+
+func getListenPorts() []ListenPort {
+	conns, err := net.Connections("all")
+	if err != nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var ports []ListenPort
+	for _, c := range conns {
+		if c.Status != "LISTEN" && c.Status != "" {
+			continue
+		}
+		if c.Type != 1 && c.Type != 2 {
+			continue
+		}
+		proto := "tcp"
+		if c.Type == 2 {
+			proto = "udp"
+		}
+		key := fmt.Sprintf("%s:%s:%d:%d", proto, c.Laddr.IP, c.Laddr.Port, c.Pid)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		p := ListenPort{Proto: proto, Address: c.Laddr.IP, Port: c.Laddr.Port, Pid: c.Pid}
+		if c.Pid > 0 {
+			if proc, err := process.NewProcess(c.Pid); err == nil {
+				if name, err := proc.Name(); err == nil {
+					p.Process = name
+				}
+			}
+		}
+		ports = append(ports, p)
+	}
+	return ports
+}
+
+type SmartDrive struct {
+	Device     string `json:"device"`
+	Model      string `json:"model,omitempty"`
+	Protocol   string `json:"protocol,omitempty"`
+	PowerOnHrs int64  `json:"power_on_hours,omitempty"`
+	WearoutPct int64  `json:"wearout_percent,omitempty"`
+	TempC      int64  `json:"temperature_c,omitempty"`
+	Health     string `json:"health,omitempty"`
+	Available  bool   `json:"available"`
+}
+
+func getSmartDrives() []SmartDrive {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	if _, err := exec.LookPath("smartctl"); err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "smartctl", "--scan").Output()
+	if err != nil {
+		return nil
+	}
+	var drives []SmartDrive
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 1 || !strings.HasPrefix(fields[0], "/dev/") {
+			continue
+		}
+		dev := fields[0]
+		d := SmartDrive{Device: dev}
+		fillSmartDrive(ctx, &d)
+		drives = append(drives, d)
+	}
+	return drives
+}
+
+func fillSmartDrive(ctx context.Context, d *SmartDrive) {
+	out, err := exec.CommandContext(ctx, "smartctl", "-a", d.Device, "-j").Output()
+	if err == nil {
+		var doc struct {
+			ModelName   string `json:"model_name"`
+			Protocol    string `json:"device_protocol"`
+			PowerOnTime struct {
+				Hours int64 `json:"hours"`
+			} `json:"power_on_time"`
+			Temperature struct {
+				Current int64 `json:"current"`
+			} `json:"temperature"`
+			NvmeSmartHealth struct {
+				PercentageUsed int64 `json:"percentage_used"`
+			} `json:"nvme_smart_health_information_log"`
+			SmartStatus struct {
+				Passed bool `json:"passed"`
+			} `json:"smart_status"`
+			AataSmartAttributes struct {
+				Table []struct {
+					Name  string `json:"name"`
+					Value int64  `json:"value"`
+					Raw   struct {
+						Value int64 `json:"value"`
+					} `json:"raw"`
+				} `json:"table"`
+			} `json:"ata_smart_attributes"`
+		}
+		if json.Unmarshal(out, &doc) == nil {
+			d.Available = true
+			d.Model = doc.ModelName
+			d.Protocol = doc.Protocol
+			d.PowerOnHrs = doc.PowerOnTime.Hours
+			d.TempC = doc.Temperature.Current
+			if doc.NvmeSmartHealth.PercentageUsed > 0 {
+				d.WearoutPct = doc.NvmeSmartHealth.PercentageUsed
+			}
+			for _, attr := range doc.AataSmartAttributes.Table {
+				switch attr.Name {
+				case "Wear_Leveling_Count", "Percent_Lifetime_Remain", "Percentage_Used_Endurance_Indicator":
+					d.WearoutPct = 100 - attr.Value
+				case "Media_Wearout_Indicator":
+					d.WearoutPct = 100 - attr.Value
+				}
+			}
+			if doc.SmartStatus.Passed {
+				d.Health = "passed"
+			} else {
+				d.Health = "failed"
+			}
+			return
+		}
+	}
+	d.Available = false
 }
 
 type SystemdUnit struct {

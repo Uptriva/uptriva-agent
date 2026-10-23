@@ -159,25 +159,29 @@ func signPayload(payload []byte, apiKey string) string {
 }
 
 type MetricsPayload struct {
-	CPUUsage    float64  `json:"cpu_usage"`
-	CPUCores    int      `json:"cpu_cores"`
-	RAMUsage    float64  `json:"ram_usage"`
-	DiskUsage   float64  `json:"disk_usage"`
-	NetIn       int64    `json:"net_in"`
-	NetOut      int64    `json:"net_out"`
-	Processes   string   `json:"processes"`
-	Interval    int      `json:"interval"`
-	Version     string   `json:"version"`
-	Load1       float64  `json:"load_1"`
-	Load5       float64  `json:"load_5"`
-	Load15      float64  `json:"load_15"`
-	UptimeSecs  uint64   `json:"uptime_secs"`
-	MemoryJSON  string   `json:"memory_detail"`
-	DisksJSON   string   `json:"disks_detail"`
-	SystemdJSON string   `json:"systemd_units"`
-	FailedUnits string   `json:"failed_units"`
-	SelfPingMs  int      `json:"self_ping_ms"`
-	CheckTypes  []string `json:"check_types,omitempty"`
+	CPUUsage         float64  `json:"cpu_usage"`
+	CPUCores         int      `json:"cpu_cores"`
+	RAMUsage         float64  `json:"ram_usage"`
+	DiskUsage        float64  `json:"disk_usage"`
+	NetIn            int64    `json:"net_in"`
+	NetOut           int64    `json:"net_out"`
+	Processes        string   `json:"processes"`
+	Interval         int      `json:"interval"`
+	Version          string   `json:"version"`
+	Load1            float64  `json:"load_1"`
+	Load5            float64  `json:"load_5"`
+	Load15           float64  `json:"load_15"`
+	UptimeSecs       uint64   `json:"uptime_secs"`
+	MemoryJSON       string   `json:"memory_detail"`
+	DisksJSON        string   `json:"disks_detail"`
+	SystemdJSON      string   `json:"systemd_units"`
+	FailedUnits      string   `json:"failed_units"`
+	SelfPingMs       int      `json:"self_ping_ms"`
+	CheckTypes       []string `json:"check_types,omitempty"`
+	CPUBreakdownJSON string   `json:"cpu_breakdown,omitempty"`
+	DiskIOJSON       string   `json:"disk_io,omitempty"`
+	PortsJSON        string   `json:"listen_ports,omitempty"`
+	SmartJSON        string   `json:"smart_drives,omitempty"`
 }
 
 func collectMetrics(apiURL string) (MetricsPayload, error) {
@@ -241,6 +245,30 @@ func collectMetrics(apiURL string) (MetricsPayload, error) {
 	}
 
 	payload.SelfPingMs = measureSelfPing(apiURL)
+
+	if cpuBreakdown := getCPUBreakdown(); cpuBreakdown != nil {
+		if b, err := json.Marshal(cpuBreakdown); err == nil {
+			payload.CPUBreakdownJSON = string(b)
+		}
+	}
+
+	if diskIO := getDiskIORates(); len(diskIO) > 0 {
+		if b, err := json.Marshal(diskIO); err == nil {
+			payload.DiskIOJSON = string(b)
+		}
+	}
+
+	if ports := getListenPorts(); len(ports) > 0 {
+		if b, err := json.Marshal(ports); err == nil {
+			payload.PortsJSON = string(b)
+		}
+	}
+
+	if drives := getSmartDrives(); len(drives) > 0 {
+		if b, err := json.Marshal(drives); err == nil {
+			payload.SmartJSON = string(b)
+		}
+	}
 
 	return payload, nil
 }
