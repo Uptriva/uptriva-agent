@@ -159,24 +159,25 @@ func signPayload(payload []byte, apiKey string) string {
 }
 
 type MetricsPayload struct {
-	CPUUsage    float64 `json:"cpu_usage"`
-	CPUCores    int     `json:"cpu_cores"`
-	RAMUsage    float64 `json:"ram_usage"`
-	DiskUsage   float64 `json:"disk_usage"`
-	NetIn       int64   `json:"net_in"`
-	NetOut      int64   `json:"net_out"`
-	Processes   string  `json:"processes"`
-	Interval    int     `json:"interval"`
-	Version     string  `json:"version"`
-	Load1       float64 `json:"load_1"`
-	Load5       float64 `json:"load_5"`
-	Load15      float64 `json:"load_15"`
-	UptimeSecs  uint64  `json:"uptime_secs"`
-	MemoryJSON  string  `json:"memory_detail"`
-	DisksJSON   string  `json:"disks_detail"`
-	SystemdJSON string  `json:"systemd_units"`
-	FailedUnits string  `json:"failed_units"`
-	SelfPingMs  int     `json:"self_ping_ms"`
+	CPUUsage    float64  `json:"cpu_usage"`
+	CPUCores    int      `json:"cpu_cores"`
+	RAMUsage    float64  `json:"ram_usage"`
+	DiskUsage   float64  `json:"disk_usage"`
+	NetIn       int64    `json:"net_in"`
+	NetOut      int64    `json:"net_out"`
+	Processes   string   `json:"processes"`
+	Interval    int      `json:"interval"`
+	Version     string   `json:"version"`
+	Load1       float64  `json:"load_1"`
+	Load5       float64  `json:"load_5"`
+	Load15      float64  `json:"load_15"`
+	UptimeSecs  uint64   `json:"uptime_secs"`
+	MemoryJSON  string   `json:"memory_detail"`
+	DisksJSON   string   `json:"disks_detail"`
+	SystemdJSON string   `json:"systemd_units"`
+	FailedUnits string   `json:"failed_units"`
+	SelfPingMs  int      `json:"self_ping_ms"`
+	CheckTypes  []string `json:"check_types,omitempty"`
 }
 
 func collectMetrics(apiURL string) (MetricsPayload, error) {
@@ -251,6 +252,7 @@ func collectMetricsWithInterval(apiURL string, interval int) (MetricsPayload, er
 	}
 	p.Interval = interval
 	p.Version = AgentVersion
+	p.CheckTypes = agentSupportedCheckTypes
 	return p, nil
 }
 
@@ -268,11 +270,12 @@ func performHandshake(token string) (Config, error) {
 	}
 
 	payload := map[string]interface{}{
-		"token":     token,
-		"hostname":  hostname,
-		"version":   AgentVersion,
-		"timestamp": timestamp,
-		"interval":  interval,
+		"token":       token,
+		"hostname":    hostname,
+		"version":     AgentVersion,
+		"timestamp":   timestamp,
+		"interval":    interval,
+		"check_types": agentSupportedCheckTypes,
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {

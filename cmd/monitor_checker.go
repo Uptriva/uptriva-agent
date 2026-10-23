@@ -31,9 +31,10 @@ type AssignedMonitor struct {
 }
 
 type MonitorCheckResult struct {
-	Status  string `json:"status"`
-	Latency int    `json:"latency"`
-	Message string `json:"message"`
+	Status  string                 `json:"status"`
+	Latency int                    `json:"latency"`
+	Message string                 `json:"message"`
+	Metrics map[string]interface{} `json:"metrics,omitempty"`
 }
 
 var blockedTargetNets []*net.IPNet
@@ -1004,6 +1005,16 @@ func checkSNMP(target string, settings json.RawMessage) (string, int, string) {
 	return "down", latency, "response was not an SNMP GetResponse"
 }
 
+var agentSupportedCheckTypes = []string{
+	"http", "https", "tcp", "telnet", "postgres", "mysql",
+	"smtp", "pop3", "imap", "smtp_connect", "smtp_starttls",
+	"ping", "icmp", "dns", "udp", "ssl", "domain", "redis",
+	"game_server", "lavalink", "ftp", "sftp", "ssh",
+	"docker", "podman", "docker_swarm", "vmware", "ceph",
+	"kubernetes", "proxmox", "network_device",
+	"rabbitmq", "kafka", "mqtt", "snmp",
+}
+
 func runMonitorCheck(monitor AssignedMonitor) (MonitorCheckResult, bool) {
 	if isBlockedTarget(monitor.Target) {
 		return MonitorCheckResult{Status: "down", Latency: 0, Message: "blocked target: link-local/cloud-metadata addresses are not allowed"}, true
@@ -1068,8 +1079,8 @@ func runMonitorCheck(monitor AssignedMonitor) (MonitorCheckResult, bool) {
 		status, latency, msg := checkGameServer(monitor.Target, monitor.Settings)
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
 	case "lavalink":
-		status, latency, msg := checkLavalink(monitor.Target, monitor.Settings)
-		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+		status, latency, msg, metrics := checkLavalink(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg, Metrics: metrics}, true
 	case "docker":
 		status, latency, msg := checkContainerRuntime("docker", monitor.Target, monitor.Settings)
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
@@ -1174,11 +1185,11 @@ type lavalinkMonitorSettings struct {
 	UseTLS   bool   `json:"use_tls"`
 }
 
-func checkLavalink(target string, settings json.RawMessage) (string, int, string) {
+func checkLavalink(target string, settings json.RawMessage) (string, int, string, map[string]interface{}) {
 	var s lavalinkMonitorSettings
 	json.Unmarshal(settings, &s)
 	if strings.TrimSpace(s.Password) == "" {
-		return "down", 0, "lavalink REST password required"
+		return "down", 0, "lavalink REST password required", nil
 	}
 	host := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSuffix(target, "/"), "https://"), "http://")
 	if h, _, err := net.SplitHostPort(host); err != nil || h == "" {
@@ -1190,7 +1201,7 @@ func checkLavalink(target string, settings json.RawMessage) (string, int, string
 	}
 	req, err := http.NewRequest("GET", scheme+"://"+host+"/v4/stats", nil)
 	if err != nil {
-		return "down", 0, "invalid target"
+		return "down", 0, "invalid target", nil
 	}
 	req.Header.Set("Authorization", s.Password)
 	start := time.Now()
@@ -1202,22 +1213,53 @@ func checkLavalink(target string, settings json.RawMessage) (string, int, string
 		if len(errMsg) > 120 {
 			errMsg = errMsg[:120]
 		}
-		return "down", latency, errMsg
+		return "down", latency, errMsg, nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return "down", latency, "lavalink auth failed — check REST password"
+		return "down", latency, "lavalink auth failed — check REST password", nil
 	}
 	if resp.StatusCode != 200 {
-		return "down", latency, fmt.Sprintf("HTTP %d from /v4/stats", resp.StatusCode)
+		return "down", latency, fmt.Sprintf("HTTP %d from /v4/stats", resp.StatusCode), nil
 	}
 	var stats struct {
-		Players        int `json:"players"`
-		PlayingPlayers int `json:"playingPlayers"`
+		Players        int   `json:"players"`
+		PlayingPlayers int   `json:"playingPlayers"`
+		Uptime         int64 `json:"uptime"`
+		Memory         struct {
+			Free      int64 `json:"free"`
+			Used      int64 `json:"used"`
+			Allocated int64 `json:"allocated"`
+		} `json:"memory"`
+		CPU struct {
+			Cores        int     `json:"cores"`
+			SystemLoad   float64 `json:"systemLoad"`
+			LavalinkLoad float64 `json:"lavalinkLoad"`
+		} `json:"cpu"`
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if err := json.Unmarshal(body, &stats); err != nil {
-		return "down", latency, "invalid stats response — is this a Lavalink v4 node?"
+		return "down", latency, "invalid stats response — is this a Lavalink v4 node?", nil
 	}
-	return "up", latency, fmt.Sprintf("%d players (%d playing)", stats.Players, stats.PlayingPlayers)
+	metrics := map[string]interface{}{
+		"players":         stats.Players,
+		"playing_players": stats.PlayingPlayers,
+		"uptime_ms":       stats.Uptime,
+		"memory_used_mb":  stats.Memory.Used / 1024 / 1024,
+		"lavalink_load":   stats.CPU.LavalinkLoad,
+		"system_load":     stats.CPU.SystemLoad,
+	}
+	return "up", latency, fmt.Sprintf("%d players (%d playing) · %d MB used · uptime %s",
+		stats.Players, stats.PlayingPlayers, stats.Memory.Used/1024/1024, formatUptimeMs(stats.Uptime)), metrics
+}
+
+func formatUptimeMs(ms int64) string {
+	d := time.Duration(ms) * time.Millisecond
+	if d >= 24*time.Hour {
+		return fmt.Sprintf("%dd%dh", int(d.Hours())/24, int(d.Hours())%24)
+	}
+	if d >= time.Hour {
+		return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+	return fmt.Sprintf("%dm", int(d.Minutes()))
 }
