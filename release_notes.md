@@ -1,3 +1,8 @@
+## v1.5.7
+
+- Kubernetes workload monitoring: kube_deploy checks now accept a `kind` setting (`deployment`, `statefulset`, `daemonset`), so StatefulSets (databases, KeyDB) and DaemonSets can be monitored for replica readiness instead of relying on pod IPs
+
+
 ## v1.4.1
 
 - Security event detection on Linux (opt-in add-on): failed SSH/sudo authentications are collected from the systemd journal and emitted as `agent.auth_failed` events (up to 20 per batch, deduplicated server-side)

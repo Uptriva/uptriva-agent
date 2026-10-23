@@ -562,6 +562,7 @@ type infraSettings struct {
 	OID                string `json:"oid"`
 	Namespace          string `json:"namespace"`
 	Deployment         string `json:"deployment"`
+	Kind               string `json:"kind"`
 	MinReady           int    `json:"min_ready"`
 	Kubeconfig         string `json:"kubeconfig"`
 }
@@ -653,6 +654,13 @@ func checkKubernetes(target string, settings json.RawMessage) (string, int, stri
 func checkKubeDeployment(target string, settings json.RawMessage) (string, int, string) {
 	var s infraSettings
 	json.Unmarshal(settings, &s)
+	kind := strings.ToLower(strings.TrimSpace(s.Kind))
+	if kind == "" {
+		kind = "deployment"
+	}
+	if kind != "deployment" && kind != "statefulset" && kind != "daemonset" {
+		return "down", 0, "unsupported workload kind: " + kind
+	}
 	ns := strings.TrimSpace(s.Namespace)
 	if ns == "" {
 		ns = "default"
@@ -662,7 +670,7 @@ func checkKubeDeployment(target string, settings json.RawMessage) (string, int, 
 		name = strings.TrimSpace(target)
 	}
 	if !validExecTarget(name) || !validExecTarget(ns) {
-		return "down", 0, "invalid deployment or namespace name"
+		return "down", 0, "invalid workload or namespace name"
 	}
 	kubeconfig := strings.TrimSpace(s.Kubeconfig)
 	if kubeconfig == "" {
@@ -679,7 +687,7 @@ func checkKubeDeployment(target string, settings json.RawMessage) (string, int, 
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "kubectl", "--kubeconfig", kubeconfig, "-n", ns, "get", "deployment", name, "-o", "json").CombinedOutput()
+	out, err := exec.CommandContext(ctx, "kubectl", "--kubeconfig", kubeconfig, "-n", ns, "get", kind, name, "-o", "json").CombinedOutput()
 	latency := int(time.Since(start).Milliseconds())
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
@@ -688,26 +696,34 @@ func checkKubeDeployment(target string, settings json.RawMessage) (string, int, 
 		}
 		return "down", latency, "kubectl failed: " + msg
 	}
-	var dep struct {
+	var wl struct {
 		Spec struct {
 			Replicas int `json:"replicas"`
 		} `json:"spec"`
 		Status struct {
-			ReadyReplicas     int `json:"readyReplicas"`
-			AvailableReplicas int `json:"availableReplicas"`
+			ReadyReplicas          int `json:"readyReplicas"`
+			AvailableReplicas      int `json:"availableReplicas"`
+			DesiredNumberScheduled int `json:"desiredNumberScheduled"`
+			NumberReady            int `json:"numberReady"`
 		} `json:"status"`
 	}
-	if err := json.Unmarshal(out, &dep); err != nil {
-		return "down", latency, "could not parse deployment status"
+	if err := json.Unmarshal(out, &wl); err != nil {
+		return "down", latency, "could not parse workload status"
 	}
-	want := dep.Spec.Replicas
+	desired := wl.Spec.Replicas
+	ready := wl.Status.ReadyReplicas
+	if kind == "daemonset" {
+		desired = wl.Status.DesiredNumberScheduled
+		ready = wl.Status.NumberReady
+	}
+	want := desired
 	if s.MinReady > 0 {
 		want = s.MinReady
 	}
-	if want > 0 && dep.Status.ReadyReplicas >= want {
-		return "up", latency, fmt.Sprintf("%d/%d replicas ready", dep.Status.ReadyReplicas, dep.Spec.Replicas)
+	if want > 0 && ready >= want {
+		return "up", latency, fmt.Sprintf("%s %d/%d replicas ready", kind, ready, desired)
 	}
-	return "down", latency, fmt.Sprintf("%d/%d replicas ready (want %d)", dep.Status.ReadyReplicas, dep.Spec.Replicas, want)
+	return "down", latency, fmt.Sprintf("%s %d/%d replicas ready (want %d)", kind, ready, desired, want)
 }
 
 func checkProxmox(target string, settings json.RawMessage) (string, int, string) {
