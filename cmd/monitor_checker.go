@@ -1017,8 +1017,28 @@ func runMonitorCheck(monitor AssignedMonitor) (MonitorCheckResult, bool) {
 		}
 		status, latency, msg := checkHTTP(monitor.Target, monitor.ExpectedStatus, monitor.ExpectedBody, verifySSL)
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
-	case "tcp", "pop3", "imap", "telnet", "postgres", "mysql", "smtp", "smtp_connect":
+	case "tcp", "telnet", "postgres", "mysql", "smtp_connect":
 		status, latency, msg := checkTCP(monitor.Target)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "smtp", "pop3", "imap":
+		verifySSL := true
+		if monitor.VerifySSL != nil {
+			verifySSL = *monitor.VerifySSL
+		}
+		status, latency, msg := checkMailAuth(monitor.Type, monitor.Target, monitor.Settings, verifySSL)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "ftp":
+		verifySSL := true
+		if monitor.VerifySSL != nil {
+			verifySSL = *monitor.VerifySSL
+		}
+		status, latency, msg := checkFTP(monitor.Target, monitor.Settings, verifySSL)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "sftp":
+		status, latency, msg := checkSFTPAuth(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "ssh":
+		status, latency, msg := checkSSHAuth(monitor.Target, monitor.Settings)
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
 	case "smtp_starttls":
 		status, latency, msg := checkSMTPStartTLS(monitor.Target)
