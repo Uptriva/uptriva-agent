@@ -94,11 +94,16 @@ func collectAgentEvents(cfg Config) []agentEventItem {
 	for _, u := range failed {
 		nextFailed[u] = true
 		if eventStateReady && !prevFailedUnits[u] {
+			restarts := unitRestartCount(u)
+			msg := fmt.Sprintf("systemd unit '%s' entered failed state", u)
+			if restarts > 0 {
+				msg = fmt.Sprintf("systemd unit '%s' entered failed state (restart #%d)", u, restarts)
+			}
 			events = append(events, agentEventItem{
 				Type:     "unit_failed",
 				Severity: "critical",
-				Message:  fmt.Sprintf("systemd unit '%s' entered failed state", u),
-				Metadata: map[string]interface{}{"unit": u},
+				Message:  msg,
+				Metadata: map[string]interface{}{"unit": u, "restart_count": restarts},
 			})
 		}
 	}
@@ -108,7 +113,7 @@ func collectAgentEvents(cfg Config) []agentEventItem {
 				Type:     "unit_recovered",
 				Severity: "info",
 				Message:  fmt.Sprintf("systemd unit '%s' recovered", u),
-				Metadata: map[string]interface{}{"unit": u},
+				Metadata: map[string]interface{}{"unit": u, "restart_count": unitRestartCount(u)},
 			})
 		}
 	}

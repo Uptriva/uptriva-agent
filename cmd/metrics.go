@@ -325,6 +325,20 @@ func getFailedSystemdUnits() []string {
 	return failed
 }
 
+func unitRestartCount(unit string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "systemctl", "show", unit, "-p", "NRestarts", "--value").Output()
+	if err != nil {
+		return -1
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
 func measureSelfPing(apiURL string) int {
 	host := apiURL
 	host = strings.TrimPrefix(host, "https://")

@@ -54,8 +54,12 @@ func collectSecurityEvents() []agentEventItem {
 		return nil
 	}
 
-	counts := map[string]int{}
-	var order []string
+	type failKey struct {
+		source  string
+		pattern string
+	}
+	counts := map[failKey]int{}
+	var order []failKey
 	var logins []agentEventItem
 	scanner := bufio.NewScanner(strings.NewReader(string(out)))
 	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
@@ -64,10 +68,12 @@ func collectSecurityEvents() []agentEventItem {
 		matched := false
 		for _, p := range authFailurePatterns {
 			if strings.Contains(line, p) {
-				if _, ok := counts[p]; !ok {
-					order = append(order, p)
+				_, src := parseSSHLoginLine(line)
+				k := failKey{source: src, pattern: p}
+				if _, ok := counts[k]; !ok {
+					order = append(order, k)
 				}
-				counts[p]++
+				counts[k]++
 				matched = true
 				break
 			}
@@ -101,12 +107,16 @@ func collectSecurityEvents() []agentEventItem {
 
 	var events []agentEventItem
 	events = append(events, logins...)
-	for _, p := range order {
+	for _, k := range order {
+		msg := fmt.Sprintf("Failed authentication: %d attempt(s) matching %q", counts[k], k.pattern)
+		if k.source != "" {
+			msg = fmt.Sprintf("Failed authentication: %d attempt(s) from %s", counts[k], k.source)
+		}
 		events = append(events, agentEventItem{
 			Type:     "auth_failed",
 			Severity: "warning",
-			Message:  fmt.Sprintf("Failed authentication: %d attempt(s) matching %q", counts[p], p),
-			Metadata: map[string]interface{}{"pattern": p, "count": counts[p]},
+			Message:  msg,
+			Metadata: map[string]interface{}{"pattern": k.pattern, "source": k.source, "count": counts[k]},
 		})
 		if len(events) >= 20 {
 			break
