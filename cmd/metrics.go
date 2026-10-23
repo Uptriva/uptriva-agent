@@ -274,6 +274,56 @@ func getUptime() uint64 {
 	return 0
 }
 
+type SystemInfo struct {
+	OS                   string `json:"os"`
+	Platform             string `json:"platform,omitempty"`
+	PlatformFamily       string `json:"platform_family,omitempty"`
+	PlatformVersion      string `json:"platform_version,omitempty"`
+	KernelVersion        string `json:"kernel_version,omitempty"`
+	KernelArch           string `json:"kernel_arch,omitempty"`
+	Hostname             string `json:"hostname,omitempty"`
+	CPUModel             string `json:"cpu_model,omitempty"`
+	CPUPhysicalCores     int    `json:"cpu_physical_cores,omitempty"`
+	CPUThreads           int    `json:"cpu_threads,omitempty"`
+	VirtualizationRole   string `json:"virtualization_role,omitempty"`
+	VirtualizationSystem string `json:"virtualization_system,omitempty"`
+}
+
+var (
+	systemInfoOnce   sync.Once
+	cachedSystemInfo *SystemInfo
+)
+
+func getSystemInfo() *SystemInfo {
+	systemInfoOnce.Do(func() {
+		info := &SystemInfo{OS: runtime.GOOS}
+		if hi, err := host.Info(); err == nil && hi != nil {
+			info.OS = hi.OS
+			info.Platform = hi.Platform
+			info.PlatformFamily = hi.PlatformFamily
+			info.PlatformVersion = hi.PlatformVersion
+			info.KernelVersion = hi.KernelVersion
+			info.KernelArch = hi.KernelArch
+			info.Hostname = hi.Hostname
+			info.VirtualizationRole = hi.VirtualizationRole
+			info.VirtualizationSystem = hi.VirtualizationSystem
+		}
+		if infos, err := cpu.Info(); err == nil && len(infos) > 0 {
+			info.CPUModel = infos[0].ModelName
+			threads := 0
+			for _, c := range infos {
+				threads += int(c.Cores)
+			}
+			info.CPUThreads = threads
+			if n, err := cpu.Counts(false); err == nil {
+				info.CPUPhysicalCores = n
+			}
+		}
+		cachedSystemInfo = info
+	})
+	return cachedSystemInfo
+}
+
 type CPUBreakdown struct {
 	User   float64 `json:"user"`
 	System float64 `json:"system"`

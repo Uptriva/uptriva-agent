@@ -182,6 +182,7 @@ type MetricsPayload struct {
 	DiskIOJSON       string   `json:"disk_io,omitempty"`
 	PortsJSON        string   `json:"listen_ports,omitempty"`
 	SmartJSON        string   `json:"smart_drives,omitempty"`
+	SystemInfoJSON   string   `json:"system_info,omitempty"`
 }
 
 func collectMetrics(apiURL string) (MetricsPayload, error) {
@@ -267,6 +268,12 @@ func collectMetrics(apiURL string) (MetricsPayload, error) {
 	if drives := getSmartDrives(); len(drives) > 0 {
 		if b, err := json.Marshal(drives); err == nil {
 			payload.SmartJSON = string(b)
+		}
+	}
+
+	if info := getSystemInfo(); info != nil {
+		if b, err := json.Marshal(info); err == nil {
+			payload.SystemInfoJSON = string(b)
 		}
 	}
 
