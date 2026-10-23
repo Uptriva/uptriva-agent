@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,13 +28,6 @@ var authSuccessPatterns = []string{
 }
 
 func collectSecurityEvents() []agentEventItem {
-	if runtime.GOOS != "linux" {
-		return nil
-	}
-	if _, err := exec.LookPath("journalctl"); err != nil {
-		return nil
-	}
-
 	now := time.Now()
 	if lastSecurityCheck.IsZero() {
 		lastSecurityCheck = now
@@ -42,6 +36,21 @@ func collectSecurityEvents() []agentEventItem {
 	since := lastSecurityCheck
 	lastSecurityCheck = now
 
+	switch runtime.GOOS {
+	case "linux":
+		return collectSecurityEventsLinux(since)
+	case "darwin":
+		return collectSecurityEventsDarwin(since)
+	case "windows":
+		return collectSecurityEventsWindows(since)
+	}
+	return nil
+}
+
+func collectSecurityEventsLinux(since time.Time) []agentEventItem {
+	if _, err := exec.LookPath("journalctl"); err != nil {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -53,15 +62,56 @@ func collectSecurityEvents() []agentEventItem {
 	if err != nil {
 		return nil
 	}
+	return parseAuthLines(string(out))
+}
 
-	type failKey struct {
-		source  string
-		pattern string
+func collectSecurityEventsDarwin(since time.Time) []agentEventItem {
+	dur := time.Since(since)
+	if dur < time.Second {
+		dur = time.Second
 	}
-	counts := map[failKey]int{}
-	var order []failKey
+	if dur > time.Hour {
+		dur = time.Hour
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "log", "show",
+		"--last", fmt.Sprintf("%ds", int(dur.Seconds())),
+		"--style", "compact",
+		"--predicate", `process == "sshd" OR process == "sudo"`)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	return parseAuthLines(string(out))
+}
+
+func collectSecurityEventsWindows(since time.Time) []agentEventItem {
+	ms := int(time.Since(since).Milliseconds())
+	if ms < 1000 {
+		ms = 1000
+	}
+	if ms > int(time.Hour.Milliseconds()) {
+		ms = int(time.Hour.Milliseconds())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	query := fmt.Sprintf("*[System[(EventID=4624 or EventID=4625) and TimeCreated[timediff(@SystemTime) <= %d]]]", ms)
+	cmd := exec.CommandContext(ctx, "wevtutil", "qe", "Security", "/q:"+query, "/f:text", "/c:500")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	return parseWindowsSecurityLog(string(out))
+}
+
+func parseAuthLines(out string) []agentEventItem {
+	counts := map[authFailKey]int{}
+	var order []authFailKey
 	var logins []agentEventItem
-	scanner := bufio.NewScanner(strings.NewReader(string(out)))
+	scanner := bufio.NewScanner(strings.NewReader(out))
 	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -69,7 +119,7 @@ func collectSecurityEvents() []agentEventItem {
 		for _, p := range authFailurePatterns {
 			if strings.Contains(line, p) {
 				_, src := parseSSHLoginLine(line)
-				k := failKey{source: src, pattern: p}
+				k := authFailKey{source: src, pattern: p}
 				if _, ok := counts[k]; !ok {
 					order = append(order, k)
 				}
@@ -104,7 +154,15 @@ func collectSecurityEvents() []agentEventItem {
 	if len(logins) > 10 {
 		logins = logins[:10]
 	}
+	return buildAuthEvents(logins, counts, order)
+}
 
+type authFailKey struct {
+	source  string
+	pattern string
+}
+
+func buildAuthEvents(logins []agentEventItem, counts map[authFailKey]int, order []authFailKey) []agentEventItem {
 	var events []agentEventItem
 	events = append(events, logins...)
 	for _, k := range order {
@@ -123,6 +181,76 @@ func collectSecurityEvents() []agentEventItem {
 		}
 	}
 	return events
+}
+
+func windowsEventField(block, name string) string {
+	idx := strings.Index(block, name+":")
+	if idx < 0 {
+		return ""
+	}
+	rest := block[idx+len(name)+1:]
+	if nl := strings.Index(rest, "\n"); nl >= 0 {
+		rest = rest[:nl]
+	}
+	return strings.TrimSpace(rest)
+}
+
+func parseWindowsSecurityLog(out string) []agentEventItem {
+	blocks := strings.Split(out, "Event[")
+	var logins []agentEventItem
+	counts := map[authFailKey]int{}
+	var order []authFailKey
+
+	for _, block := range blocks {
+		idStr := windowsEventField(block, "Event ID")
+		eventID, err := strconv.Atoi(idStr)
+		if err != nil {
+			continue
+		}
+		src := windowsEventField(block, "Source Network Address")
+		if src == "" {
+			src = windowsEventField(block, "Source Address")
+		}
+		if src == "-" {
+			src = ""
+		}
+
+		switch eventID {
+		case 4625:
+			user := windowsEventField(block, "Account Name")
+			k := authFailKey{source: src, pattern: "logon_failure"}
+			if user != "" {
+				k.pattern = "logon_failure:" + user
+			}
+			if _, ok := counts[k]; !ok {
+				order = append(order, k)
+			}
+			counts[k]++
+		case 4624:
+			lt, err := strconv.Atoi(windowsEventField(block, "Logon Type"))
+			if err != nil || (lt != 3 && lt != 10 && lt != 11) {
+				continue
+			}
+			account := windowsEventField(block, "Account Name")
+			if account == "" || strings.HasSuffix(account, "$") {
+				continue
+			}
+			msg := fmt.Sprintf("Remote logon (type %d): %s", lt, account)
+			if src != "" {
+				msg = fmt.Sprintf("Remote logon (type %d): %s from %s", lt, account, src)
+			}
+			logins = append(logins, agentEventItem{
+				Type:     "remote_login",
+				Severity: "info",
+				Message:  msg,
+				Metadata: map[string]interface{}{"user": account, "source": src, "logon_type": lt},
+			})
+		}
+	}
+	if len(logins) > 10 {
+		logins = logins[:10]
+	}
+	return buildAuthEvents(logins, counts, order)
 }
 
 func parseSSHLoginLine(line string) (string, string) {

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	gopsnet "github.com/shirou/gopsutil/v3/net"
 )
 
 var defaultIntegrityWatchFiles = []string{
@@ -25,6 +27,16 @@ var defaultIntegrityWatchFiles = []string{
 
 var defaultIntegrityWatchGlobs = []string{
 	"/home/*/.ssh/authorized_keys",
+}
+
+func integrityWatchGlobs() []string {
+	switch runtime.GOOS {
+	case "darwin":
+		return []string{"/Users/*/.ssh/authorized_keys"}
+	case "windows":
+		return []string{`C:\Users\*\.ssh\authorized_keys`}
+	}
+	return defaultIntegrityWatchGlobs
 }
 
 var (
@@ -41,6 +53,9 @@ var (
 )
 
 func listeningSockets() map[string]bool {
+	if runtime.GOOS != "linux" {
+		return listeningSocketsGopsutil()
+	}
 	set := map[string]bool{}
 	for _, f := range []struct {
 		path  string
@@ -82,10 +97,22 @@ func listeningSockets() map[string]bool {
 	return set
 }
 
-func collectPortEvents() []agentEventItem {
-	if runtime.GOOS != "linux" {
-		return nil
+func listeningSocketsGopsutil() map[string]bool {
+	set := map[string]bool{}
+	conns, err := gopsnet.Connections("tcp")
+	if err != nil {
+		return set
 	}
+	for _, c := range conns {
+		if c.Status != "LISTEN" || c.Laddr.Port == 0 {
+			continue
+		}
+		set[fmt.Sprintf("tcp/%d", c.Laddr.Port)] = true
+	}
+	return set
+}
+
+func collectPortEvents() []agentEventItem {
 	portWatchMu.Lock()
 	defer portWatchMu.Unlock()
 
@@ -124,6 +151,58 @@ func collectPortEvents() []agentEventItem {
 	return events
 }
 
+func localUserNames() map[string]int {
+	switch runtime.GOOS {
+	case "linux":
+		return parsePasswdUsers()
+	case "darwin":
+		return parseDsclUsers()
+	case "windows":
+		return parseWindowsUsers()
+	}
+	return nil
+}
+
+func parseDsclUsers() map[string]int {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "dscl", ".", "-list", "/Users", "UniqueID").Output()
+	if err != nil {
+		return nil
+	}
+	users := map[string]int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] == "" {
+			continue
+		}
+		uid, err := strconv.Atoi(fields[len(fields)-1])
+		if err != nil {
+			continue
+		}
+		users[fields[0]] = uid
+	}
+	return users
+}
+
+func parseWindowsUsers() map[string]int {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command",
+		"Get-LocalUser | Select-Object -ExpandProperty Name").Output()
+	if err != nil {
+		return nil
+	}
+	users := map[string]int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		name := strings.TrimSpace(line)
+		if name != "" {
+			users[name] = 0
+		}
+	}
+	return users
+}
+
 func parsePasswdUsers() map[string]int {
 	f, err := os.Open("/etc/passwd")
 	if err != nil {
@@ -150,15 +229,20 @@ func parsePasswdUsers() map[string]int {
 }
 
 func collectIntegrityEvents(cfg Config) []agentEventItem {
-	if runtime.GOOS != "linux" {
-		return nil
-	}
 	integrityMu.Lock()
 	defer integrityMu.Unlock()
 
 	watchSet := append([]string{}, defaultIntegrityWatchFiles...)
 	watchSet = append(watchSet, cfg.WatchFiles...)
-	for _, glob := range defaultIntegrityWatchGlobs {
+	switch runtime.GOOS {
+	case "darwin":
+		watchSet = append(watchSet, "/etc/ssh/sshd_config", "/var/root/.ssh/authorized_keys", "/etc/crontab")
+	case "windows":
+		watchSet = append(watchSet,
+			`C:\ProgramData\ssh\sshd_config`,
+			`C:\ProgramData\ssh\administrators_authorized_keys`)
+	}
+	for _, glob := range integrityWatchGlobs() {
 		if matches, err := filepath.Glob(glob); err == nil {
 			watchSet = append(watchSet, matches...)
 		}
@@ -170,7 +254,7 @@ func collectIntegrityEvents(cfg Config) []agentEventItem {
 			hashes[p] = h
 		}
 	}
-	passwdUsers := parsePasswdUsers()
+	passwdUsers := localUserNames()
 
 	if !integrityReady {
 		integrityReady = true

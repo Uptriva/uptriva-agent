@@ -81,14 +81,6 @@ func (s *logWatchState) setRules(rules []logWatchRule) {
 	}
 }
 
-func (s *logWatchState) getCompiledRules() []logWatchRule {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]logWatchRule, len(s.rules))
-	copy(out, s.rules)
-	return out
-}
-
 func (s *logWatchState) match(line string, unit string) {
 	s.mu.Lock()
 	compiled := s.compiled
