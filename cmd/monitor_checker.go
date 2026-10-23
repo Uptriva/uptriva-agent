@@ -1047,6 +1047,9 @@ func runMonitorCheck(monitor AssignedMonitor) (MonitorCheckResult, bool) {
 	case "game_server":
 		status, latency, msg := checkGameServer(monitor.Target, monitor.Settings)
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
+	case "lavalink":
+		status, latency, msg := checkLavalink(monitor.Target, monitor.Settings)
+		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
 	case "docker":
 		status, latency, msg := checkContainerRuntime("docker", monitor.Target, monitor.Settings)
 		return MonitorCheckResult{Status: status, Latency: latency, Message: msg}, true
@@ -1144,4 +1147,57 @@ func startMonitorChecker(apiURL, token string) {
 
 		time.Sleep(10 * time.Second)
 	}
+}
+
+type lavalinkMonitorSettings struct {
+	Password string `json:"password"`
+	UseTLS   bool   `json:"use_tls"`
+}
+
+func checkLavalink(target string, settings json.RawMessage) (string, int, string) {
+	var s lavalinkMonitorSettings
+	json.Unmarshal(settings, &s)
+	if strings.TrimSpace(s.Password) == "" {
+		return "down", 0, "lavalink REST password required"
+	}
+	host := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSuffix(target, "/"), "https://"), "http://")
+	if h, _, err := net.SplitHostPort(host); err != nil || h == "" {
+		host = net.JoinHostPort(strings.Trim(host, "[]"), "2333")
+	}
+	scheme := "http"
+	if s.UseTLS {
+		scheme = "https"
+	}
+	req, err := http.NewRequest("GET", scheme+"://"+host+"/v4/stats", nil)
+	if err != nil {
+		return "down", 0, "invalid target"
+	}
+	req.Header.Set("Authorization", s.Password)
+	start := time.Now()
+	client := checkedHTTPClient(10*time.Second, true)
+	resp, err := client.Do(req)
+	latency := int(time.Since(start).Milliseconds())
+	if err != nil {
+		errMsg := err.Error()
+		if len(errMsg) > 120 {
+			errMsg = errMsg[:120]
+		}
+		return "down", latency, errMsg
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		return "down", latency, "lavalink auth failed — check REST password"
+	}
+	if resp.StatusCode != 200 {
+		return "down", latency, fmt.Sprintf("HTTP %d from /v4/stats", resp.StatusCode)
+	}
+	var stats struct {
+		Players        int `json:"players"`
+		PlayingPlayers int `json:"playingPlayers"`
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err := json.Unmarshal(body, &stats); err != nil {
+		return "down", latency, "invalid stats response — is this a Lavalink v4 node?"
+	}
+	return "up", latency, fmt.Sprintf("%d players (%d playing)", stats.Players, stats.PlayingPlayers)
 }
