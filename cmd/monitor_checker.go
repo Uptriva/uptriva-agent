@@ -771,7 +771,8 @@ func kubeListPods(kubeconfig, ns, selector string) []map[string]interface{} {
 	var list struct {
 		Items []struct {
 			Metadata struct {
-				Name string `json:"name"`
+				Name              string `json:"name"`
+				CreationTimestamp string `json:"creationTimestamp"`
 			} `json:"metadata"`
 			Spec struct {
 				NodeName string `json:"nodeName"`
@@ -788,26 +789,88 @@ func kubeListPods(kubeconfig, ns, selector string) []map[string]interface{} {
 	if err := json.Unmarshal(out, &list); err != nil {
 		return nil
 	}
+	top := kubeTopPods(kubeconfig, ns, selector)
 	pods := make([]map[string]interface{}, 0, len(list.Items))
 	for _, p := range list.Items {
 		readyCount := 0
 		restarts := 0
+		total := len(p.Status.ContainerStatuses)
 		for _, cs := range p.Status.ContainerStatuses {
 			if cs.Ready {
 				readyCount++
 			}
 			restarts += cs.RestartCount
 		}
-		pods = append(pods, map[string]interface{}{
+		pod := map[string]interface{}{
 			"name":          p.Metadata.Name,
 			"phase":         p.Status.Phase,
-			"ready":         fmt.Sprintf("%d/%d", readyCount, len(p.Status.ContainerStatuses)),
+			"ready":         fmt.Sprintf("%d/%d", readyCount, total),
 			"restarts":      restarts,
 			"node":          p.Spec.NodeName,
-			"container_set": len(p.Status.ContainerStatuses),
-		})
+			"container_set": total,
+		}
+		if t, ok := top[p.Metadata.Name]; ok {
+			pod["cpu_milli"] = t[0]
+			pod["mem_mib"] = t[1]
+		}
+		if p.Metadata.CreationTimestamp != "" {
+			if started, err := time.Parse(time.RFC3339, p.Metadata.CreationTimestamp); err == nil {
+				pod["age_seconds"] = int(time.Since(started).Seconds())
+			}
+		}
+		unhealthy := p.Status.Phase != "Running" || readyCount < total || restarts > 0
+		if unhealthy {
+			if logs := kubePodLogs(kubeconfig, ns, p.Metadata.Name, 8); len(logs) > 0 {
+				pod["logs"] = logs
+			}
+		}
+		pods = append(pods, pod)
 	}
 	return pods
+}
+
+func kubeTopPods(kubeconfig, ns, selector string) map[string][2]int {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "kubectl", "--kubeconfig", kubeconfig, "-n", ns, "top", "pods", "-l", selector, "--no-headers").CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	top := map[string][2]int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		cpu, _ := strconv.Atoi(strings.TrimSuffix(fields[1], "m"))
+		mem, _ := strconv.Atoi(strings.TrimSuffix(fields[2], "Mi"))
+		top[fields[0]] = [2]int{cpu, mem}
+	}
+	return top
+}
+
+func kubePodLogs(kubeconfig, ns, pod string, tail int) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "kubectl", "--kubeconfig", kubeconfig, "-n", ns, "logs", pod, "--tail", strconv.Itoa(tail)).CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if len(line) > 200 {
+			line = line[:200]
+		}
+		lines = append(lines, line)
+		if len(lines) >= tail {
+			break
+		}
+	}
+	return lines
 }
 
 func checkProxmox(target string, settings json.RawMessage) (string, int, string) {
