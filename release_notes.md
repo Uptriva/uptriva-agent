@@ -1,3 +1,7 @@
+## v1.6.1
+
+- kube_deploy checks now report `degraded` on partial replica loss instead of `down`, so a single pod failing reads as a warning, not an outage
+
 ## v1.5.9
 
 - kube_deploy checks now report per-pod metrics (name, phase, ready containers, restarts, node) so the dashboard can render a full workload view with replica counts and a pod table
