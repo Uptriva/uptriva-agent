@@ -738,7 +738,10 @@ func checkKubeDeployment(target string, settings json.RawMessage) (string, int, 
 	if want > 0 && ready >= want {
 		return "up", latency, fmt.Sprintf("%s %d/%d replicas ready", kind, ready, desired), metrics
 	}
-	return "down", latency, fmt.Sprintf("%s %d/%d replicas ready (want %d)", kind, ready, desired, want), metrics
+	if ready > 0 {
+		return "degraded", latency, fmt.Sprintf("%s %d/%d replicas ready (want %d)", kind, ready, desired, want), metrics
+	}
+	return "down", latency, fmt.Sprintf("%s 0/%d replicas ready", kind, desired), metrics
 }
 
 func kubeSelectorString(selector map[string]interface{}) string {
