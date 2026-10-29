@@ -1,3 +1,7 @@
+## v1.6.2
+
+- FreeBSD support in the one-liner installer — rc.d service, native /usr/local paths, sha256 -q checksums (OPNsense-ready)
+
 ## v1.6.1
 
 - kube_deploy checks now report `degraded` on partial replica loss instead of `down`, so a single pod failing reads as a warning, not an outage
