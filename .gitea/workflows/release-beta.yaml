@@ -1,0 +1,109 @@
+name: Build and Push Uptime Agent (Beta)
+
+on:
+  push:
+    branches: [ "beta" ]
+
+jobs:
+  build-uptime-agent-beta:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26
+
+      - name: Setup Go
+        uses: actions/setup-go@7b8cf10d4e4a01d4992d18a89f4d7dc5a3e6d6f4
+        with:
+          go-version: '1.25.5'
+
+      - name: Read Version
+        id: version
+        run: |
+          VERSION=$(cat VERSION)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build Static Agents for Multi-Platforms
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist/linux/amd64 dist/linux/arm64 dist/windows/amd64 dist/darwin/amd64 dist/darwin/arm64
+          LDFLAGS="-s -w -X main.releasePublicKeyHex=${{ secrets.AGENT_RELEASE_PUBKEY }} -X main.AgentVersion=${VERSION}-beta.${{ github.run_number }}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/linux/amd64/uptriva-agent ./cmd/
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/linux/arm64/uptriva-agent ./cmd/
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/windows/amd64/uptriva-agent.exe ./cmd/
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/darwin/amd64/uptriva-agent ./cmd/
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/darwin/arm64/uptriva-agent ./cmd/
+
+      - name: Generate Checksums and Metadata
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "${VERSION}-beta.${{ github.run_number }}" > dist/version
+          if [ -f MIN_AGENT_VERSION ]; then
+            cp MIN_AGENT_VERSION dist/min_agent_version
+          fi
+          if [ -f privacy_policy_version ]; then
+            cp privacy_policy_version dist/privacy_policy_version
+          else
+            echo "1.0.0" > dist/privacy_policy_version
+          fi
+          if [ -f release_notes.md ]; then
+            cp release_notes.md dist/release_notes.md
+          fi
+          if [ -f requires_consent ]; then
+            touch dist/requires_consent
+          fi
+
+      - name: Compress and Upload to Download Server (Beta)
+        env:
+          DOWNLOAD_BETA_API_KEY: ${{ secrets.DOWNLOAD_BETA_API_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tar -czf release.tar.gz -C dist .
+          curl -X POST https://download.uptriva.com/upload/beta \
+            -H "Authorization: Bearer $DOWNLOAD_BETA_API_KEY" \
+            -F "file=@release.tar.gz" \
+            --fail --show-error --silent || \
+          curl -X POST https://download.shxrk.systems/upload/beta \
+            -H "Authorization: Bearer $DOWNLOAD_BETA_API_KEY" \
+            -F "file=@release.tar.gz" \
+            --fail --show-error --silent
+
+      - name: Generate Signed Manifest and GitHub Assets (Beta)
+        env:
+          AGENT_RELEASE_SIGNING_KEY: ${{ secrets.AGENT_RELEASE_SIGNING_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p ghassets
+          cp dist/linux/amd64/uptriva-agent ghassets/uptriva-agent-linux-amd64
+          cp dist/linux/arm64/uptriva-agent ghassets/uptriva-agent-linux-arm64
+          cp dist/windows/amd64/uptriva-agent.exe ghassets/uptriva-agent-windows-amd64.exe
+          cp dist/darwin/amd64/uptriva-agent ghassets/uptriva-agent-darwin-amd64
+          cp dist/darwin/arm64/uptriva-agent ghassets/uptriva-agent-darwin-arm64
+          go run ./tools/releasemanifest -dir dist -repo Uptriva/uptriva-agent -tag "v${VERSION}-beta.${{ github.run_number }}" -out ghassets/manifest.json
+
+      - name: Publish GitHub Prerelease
+        env:
+          GITHUB_RELEASE_TOKEN: ${{ secrets.GITHUB_RELEASE_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          TAG="v${VERSION}-beta.${{ github.run_number }}"
+          CREATE=$(curl -sS -X POST "https://api.github.com/repos/Uptriva/uptriva-agent/releases" \
+            -H "Authorization: Bearer ${GITHUB_RELEASE_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG} (Beta)\",\"prerelease\":true}")
+          UPLOAD_URL=$(echo "$CREATE" | sed -n 's/.*"upload_url":[[:space:]]*"\([^"{]*\).*/\1/p')
+          if [ -z "$UPLOAD_URL" ]; then
+            echo "$CREATE"
+            echo "Failed to create GitHub prerelease"
+            exit 1
+          fi
+          for f in ghassets/*; do
+            NAME=$(basename "$f")
+            CODE=$(curl -sS -o /dev/null -w "%{http_code}" -X POST "${UPLOAD_URL}?name=${NAME}" \
+              -H "Authorization: Bearer ${GITHUB_RELEASE_TOKEN}" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$f")
+            echo "uploaded $NAME ($CODE)"
+            case "$CODE" in 2*) ;; *) exit 1 ;; esac
+          done
