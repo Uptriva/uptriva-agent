@@ -34,17 +34,14 @@ var (
 
 const (
 	DefaultAPIURL                    = "https://api.uptriva.com"
-	DefaultDownloadURL               = "https://download.uptriva.com"
 	DefaultGitHubReleaseRepo         = "Uptriva/uptriva-agent"
 	LegacyAPIURL                     = "https://api.shxrk.systems"
-	LegacyDownloadURL                = "https://download.shxrk.systems"
 	MinInterval                      = 15
 	DefaultInterval                  = 30
 	DefaultAutoUpdateEnabled         = true
 	DefaultAutoUpdateIntervalMinutes = 30
 )
 
-var downloadBaseURLs = []string{DefaultDownloadURL, LegacyDownloadURL}
 var apiBaseURLs = []string{DefaultAPIURL, LegacyAPIURL}
 
 type Config struct {
@@ -466,43 +463,8 @@ type PlatformAsset struct {
 	URL      string `json:"url"`
 }
 
-func fetchManifestFrom(downloadURL string, betaChannel bool) (*AgentManifest, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
-	manifestPath := "/manifest"
-	if betaChannel {
-		manifestPath = "/manifest/beta"
-	}
-	resp, err := client.Get(downloadURL + manifestPath)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("manifest endpoint returned %d", resp.StatusCode)
-	}
-	var manifest AgentManifest
-	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
-		return nil, err
-	}
-	if err := verifyManifestSignature(&manifest); err != nil {
-		return nil, err
-	}
-	return &manifest, nil
-}
-
 func fetchManifest(betaChannel bool) (*AgentManifest, error) {
-	if manifest, err := fetchManifestFromGitHub(betaChannel); err == nil {
-		return manifest, nil
-	}
-	var lastErr error
-	for _, base := range downloadBaseURLs {
-		manifest, err := fetchManifestFrom(base, betaChannel)
-		if err == nil {
-			return manifest, nil
-		}
-		lastErr = err
-	}
-	return nil, lastErr
+	return fetchManifestFromGitHub(betaChannel)
 }
 
 type githubReleaseAsset struct {
@@ -618,21 +580,7 @@ func downloadFile(assetURL string) (*http.Response, error) {
 		}
 		return resp, nil
 	}
-	var lastErr error
-	for _, base := range downloadBaseURLs {
-		resp, err := client.Get(base + assetURL)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			lastErr = fmt.Errorf("download returned %d", resp.StatusCode)
-			continue
-		}
-		return resp, nil
-	}
-	return nil, lastErr
+	return nil, fmt.Errorf("relative asset URLs are not supported: %s", assetURL)
 }
 
 func compareVersions(a, b string) int {
