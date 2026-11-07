@@ -47,9 +47,6 @@ jobs:
           else
             echo "1.0.0" > dist/privacy_policy_version
           fi
-          if [ -f release_notes.md ]; then
-            cp release_notes.md dist/release_notes.md
-          fi
           if [ -f requires_consent ]; then
             touch dist/requires_consent
           fi

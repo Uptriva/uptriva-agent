@@ -151,11 +151,6 @@ func main() {
 		ppURL = "https://uptriva.com/privacy"
 	}
 
-	releaseNotes := ""
-	if data, err := os.ReadFile(filepath.Join(*dir, "release_notes.md")); err == nil {
-		releaseNotes = string(data)
-	}
-
 	requiresConsent := false
 	if _, err := os.Stat(filepath.Join(*dir, "requires_consent")); err == nil {
 		requiresConsent = true
@@ -180,7 +175,7 @@ func main() {
 		MinAgentVersion:      minVersion,
 		PrivacyPolicyVersion: ppVersion,
 		PrivacyPolicyURL:     ppURL,
-		ReleaseNotes:         releaseNotes,
+		ReleaseNotes:         "",
 		RequiresConsent:      requiresConsent,
 		Platforms:            platformMap,
 	}
