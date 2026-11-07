@@ -55,21 +55,6 @@ jobs:
             touch dist/requires_consent
           fi
 
-      - name: Compress and Upload to Download Server
-        env:
-          DOWNLOAD_API_KEY: ${{ secrets.DOWNLOAD_API_KEY }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          tar -czf release.tar.gz -C dist .
-          curl -X POST https://download.uptriva.com/upload \
-            -H "Authorization: Bearer $DOWNLOAD_API_KEY" \
-            -F "file=@release.tar.gz" \
-            --fail --show-error --silent || \
-          curl -X POST https://download.shxrk.systems/upload \
-            -H "Authorization: Bearer $DOWNLOAD_API_KEY" \
-            -F "file=@release.tar.gz" \
-            --fail --show-error --silent
-
       - name: Generate Signed Manifest and GitHub Assets
         env:
           AGENT_RELEASE_SIGNING_KEY: ${{ secrets.AGENT_RELEASE_SIGNING_KEY }}

@@ -24,14 +24,16 @@ This agent is open source for transparency. You can review the code to verify:
 ### Linux/macOS
 
 ```bash
-wget https://download.uptriva.com/agents/linux/amd64/uptriva-agent
-chmod +x uptriva-agent
-sudo mv uptriva-agent /usr/local/bin/uptriva-agent
+wget https://github.com/Uptriva/uptriva-agent/releases/latest/download/uptriva-agent-linux-amd64
+chmod +x uptriva-agent-linux-amd64
+sudo mv uptriva-agent-linux-amd64 /usr/local/bin/uptriva-agent
 ```
+
+For ARM64 (e.g. Raspberry Pi, ARM servers) use `uptriva-agent-linux-arm64` instead. On macOS use `uptriva-agent-darwin-arm64` (Apple Silicon) or `uptriva-agent-darwin-amd64` (Intel).
 
 ### Windows
 
-Download the latest binary from [Releases](https://github.com/Uptriva/uptriva-agent/releases) and place it in your PATH.
+Download `uptriva-agent-windows-amd64.exe` from [Releases](https://github.com/Uptriva/uptriva-agent/releases) and place it in your PATH.
 
 ## Usage
 
@@ -171,8 +173,8 @@ sudo systemctl restart uptriva-agent
 
 The agent checks for updates by default every `auto_update_interval_minutes` minutes. Updates are delivered as an ed25519-signed manifest that lists per-platform binaries with SHA-256 checksums; the agent verifies the signature before downloading and installing.
 
-- **Stable (default)** — the agent fetches the latest non-prerelease GitHub release from `Uptriva/uptriva-agent`, falling back to the Uptriva download server (`https://download.uptriva.com/manifest`) if GitHub is unreachable.
-- **Beta** — set `beta_channel: true` in the config or pass `--beta`. The agent then follows the newest GitHub *prerelease* or `https://download.uptriva.com/manifest/beta`. Beta builds are published from the `beta` branch and are not promoted to stable automatically.
+- **Stable (default)** — the agent fetches the latest non-prerelease GitHub release from `Uptriva/uptriva-agent` and its signed `manifest.json` asset.
+- **Beta** — set `beta_channel: true` in the config or pass `--beta`. The agent then follows the newest GitHub *prerelease*. Beta builds are published from the `beta` branch and are not promoted to stable automatically.
 - The GitHub repository can be overridden with `AGENT_GITHUB_REPO=owner/name` (useful for mirrors or forks).
 
 If a release changes the privacy policy version, the update pauses until an operator runs `uptriva-agent -accept-privacy-policy` to consent. The current policy is published at <https://uptriva.com/privacy>.
@@ -181,7 +183,7 @@ If a release changes the privacy policy version, the update pauses until an oper
 
 Things you should know before running this on your servers:
 
-- **Self-update is on by default.** The agent periodically replaces its binary from GitHub Releases (falling back to the Uptriva download server). Official releases are verified against an ed25519-signed manifest; self-built binaries skip signature verification unless you set `AGENT_RELEASE_PUBKEY`. Disable with `AGENT_DISABLE_UPDATE=true`.
+- **Self-update is on by default.** The agent periodically replaces its binary from GitHub Releases. Official releases are verified against an ed25519-signed manifest; self-built binaries skip signature verification unless you set `AGENT_RELEASE_PUBKEY`. Disable with `AGENT_DISABLE_UPDATE=true`.
 - **Remote commands are off by default.** Enabling them lets the platform restart services, reboot the host, update packages, or run scripts (`exec_script` needs an extra flag). Review `cmd/commands.go` before opting in.
 - **What leaves the host:** system metrics, process names, listening ports, systemd units, and host identity. Opt-in features can additionally send journal lines, SSH/sudo events, k8s pod log tails, and file-change events. Monitor check results may include credentials the platform assigns to this agent.
 - **Your token is stored in cleartext** in `agent_config.json` (mode 0600). Protect the file accordingly.
