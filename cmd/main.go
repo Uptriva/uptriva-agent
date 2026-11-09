@@ -69,6 +69,7 @@ type Config struct {
 	DisableRemoteCommands      bool     `json:"disable_remote_commands"`
 	EnableRemoteCommands       bool     `json:"enable_remote_commands"`
 	AllowExecScript            bool     `json:"allow_exec_script"`
+	AllowSystemCommands        bool     `json:"allow_system_commands"`
 }
 
 func remoteCommandsEnabled(c *Config) bool {
@@ -80,6 +81,10 @@ func remoteCommandsEnabled(c *Config) bool {
 
 func execScriptAllowed(c *Config) bool {
 	return c.AllowExecScript || envFlagEnabled("AGENT_ALLOW_EXEC_SCRIPT")
+}
+
+func systemCommandsAllowed(c *Config) bool {
+	return c.AllowSystemCommands || envFlagEnabled("AGENT_ALLOW_SYSTEM_CMDS")
 }
 
 func envFlagEnabled(name string) bool {
@@ -440,10 +445,10 @@ func manifestSigningPayload(m *AgentManifest) []byte {
 
 func verifyManifestSignature(m *AgentManifest) error {
 	if len(releasePublicKey) == 0 {
-		if envFlagEnabled("AGENT_REQUIRE_SIGNED_RELEASES") {
-			return fmt.Errorf("release public key not configured but signed releases are required")
+		if envFlagEnabled("AGENT_ALLOW_UNSIGNED_RELEASES") {
+			return nil
 		}
-		return nil
+		return fmt.Errorf("release public key not configured, refusing unsigned release")
 	}
 	if m.Signature == "" {
 		return fmt.Errorf("manifest is unsigned but signature verification is enabled")

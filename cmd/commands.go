@@ -124,6 +124,10 @@ func executeAgentCommand(apiURL, token string, cmd AgentCommandPoll, cfg *Config
 	var result string
 
 	if cmd.Command == "reboot_host" {
+		if !systemCommandsAllowed(cfg) {
+			ackAgentCommand(apiURL, token, cmd.ID, "failed", "reboot_host is disabled on this agent — set allow_system_commands or AGENT_ALLOW_SYSTEM_CMDS=true")
+			return
+		}
 		ackAgentCommand(apiURL, token, cmd.ID, "completed", "reboot scheduled")
 		rebootHost()
 		return
@@ -142,6 +146,11 @@ func executeAgentCommand(apiURL, token string, cmd AgentCommandPoll, cfg *Config
 	case "collect_diagnostics":
 		result = collectDiagnostics(apiURL)
 	case "update_packages":
+		if !systemCommandsAllowed(cfg) {
+			status = "failed"
+			result = "update_packages is disabled on this agent — set allow_system_commands or AGENT_ALLOW_SYSTEM_CMDS=true"
+			break
+		}
 		result = updatePackages()
 	case "set_feature_flags":
 		result = applyFeatureFlags(cfg, params)
