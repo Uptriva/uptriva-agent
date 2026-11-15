@@ -1180,6 +1180,9 @@ func main() {
 	commandTicker := time.NewTicker(commandPollInterval)
 	defer commandTicker.Stop()
 
+	processEventTicker := time.NewTicker(processEventPollInterval)
+	defer processEventTicker.Stop()
+
 	for {
 		select {
 		case <-commandTicker.C:
@@ -1189,6 +1192,12 @@ func main() {
 		case <-updateCh:
 			if autoUpdate && performUpdate(&config) {
 				os.Exit(0)
+			}
+		case <-processEventTicker.C:
+			if len(config.WatchServices) > 0 {
+				if events := collectProcessEvents(config); len(events) > 0 {
+					sendAgentEvents(config, events)
+				}
 			}
 		case <-metricTicker.C:
 			payload, err := collectMetricsWithInterval(config.APIURL, config.Interval)

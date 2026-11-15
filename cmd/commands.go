@@ -19,6 +19,7 @@ import (
 
 const commandPollInterval = 15 * time.Second
 const commandExecTimeout = 120 * time.Second
+const processEventPollInterval = 5 * time.Second
 
 type AgentCommandPoll struct {
 	ID      string `json:"id"`

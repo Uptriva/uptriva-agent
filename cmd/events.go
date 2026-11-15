@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/shirou/gopsutil/v3/process"
 )
 
 type agentEventItem struct {
@@ -20,23 +22,85 @@ type agentEventItem struct {
 }
 
 var (
-	eventStateMu       sync.Mutex
-	prevWatchedRunning map[string]bool
-	prevFailedUnits    map[string]bool
-	prevInterfaceUp    map[string]bool
-	eventStateReady    bool
+	eventStateMu    sync.Mutex
+	prevWatchedPID  map[string]int32
+	seenWatchedProc map[string]bool
+	procStateReady  bool
+	prevFailedUnits map[string]bool
+	prevInterfaceUp map[string]bool
+	eventStateReady bool
 )
 
-func processNameSet() map[string]bool {
-	set := map[string]bool{}
-	var names []string
-	if err := json.Unmarshal([]byte(getRunningProcesses()), &names); err != nil {
+func processNamePIDMap() map[string]int32 {
+	set := map[string]int32{}
+	procs, err := process.Processes()
+	if err != nil {
 		return set
 	}
-	for _, n := range names {
-		set[strings.ToLower(n)] = true
+	for _, p := range procs {
+		name, err := p.Name()
+		if err != nil || name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if cur, ok := set[key]; !ok || p.Pid < cur {
+			set[key] = p.Pid
+		}
 	}
 	return set
+}
+
+func collectProcessEvents(cfg Config) []agentEventItem {
+	eventStateMu.Lock()
+	defer eventStateMu.Unlock()
+
+	var events []agentEventItem
+	procSet := processNamePIDMap()
+	nextWatched := map[string]int32{}
+	if seenWatchedProc == nil {
+		seenWatchedProc = map[string]bool{}
+	}
+	for _, svc := range cfg.WatchServices {
+		name := strings.ToLower(strings.TrimSpace(svc))
+		if name == "" {
+			continue
+		}
+		pid, running := procSet[name]
+		if running {
+			nextWatched[name] = pid
+		}
+		firstSeen := !seenWatchedProc[name]
+		seenWatchedProc[name] = true
+		if procStateReady && !firstSeen {
+			prevPID, wasRunning := prevWatchedPID[name]
+			switch {
+			case wasRunning && !running:
+				events = append(events, agentEventItem{
+					Type:     "process_exit",
+					Severity: "critical",
+					Message:  fmt.Sprintf("Watched process '%s' exited", name),
+					Metadata: map[string]interface{}{"process": name},
+				})
+			case !wasRunning && running:
+				events = append(events, agentEventItem{
+					Type:     "process_recovered",
+					Severity: "info",
+					Message:  fmt.Sprintf("Watched process '%s' is running again", name),
+					Metadata: map[string]interface{}{"process": name},
+				})
+			case wasRunning && running && prevPID != pid:
+				events = append(events, agentEventItem{
+					Type:     "process_restart",
+					Severity: "warning",
+					Message:  fmt.Sprintf("Watched process '%s' restarted (pid %d → %d)", name, prevPID, pid),
+					Metadata: map[string]interface{}{"process": name, "pid": pid, "previous_pid": prevPID},
+				})
+			}
+		}
+	}
+	prevWatchedPID = nextWatched
+	procStateReady = true
+	return events
 }
 
 func interfaceUpMap() map[string]bool {
@@ -59,35 +123,6 @@ func collectAgentEvents(cfg Config) []agentEventItem {
 	defer eventStateMu.Unlock()
 
 	var events []agentEventItem
-
-	procSet := processNameSet()
-	nextWatched := map[string]bool{}
-	for _, svc := range cfg.WatchServices {
-		name := strings.ToLower(strings.TrimSpace(svc))
-		if name == "" {
-			continue
-		}
-		running := procSet[name]
-		nextWatched[name] = running
-		if eventStateReady {
-			if prevWatchedRunning[name] && !running {
-				events = append(events, agentEventItem{
-					Type:     "process_exit",
-					Severity: "critical",
-					Message:  fmt.Sprintf("Watched process '%s' exited", name),
-					Metadata: map[string]interface{}{"process": name},
-				})
-			} else if !prevWatchedRunning[name] && running {
-				events = append(events, agentEventItem{
-					Type:     "process_recovered",
-					Severity: "info",
-					Message:  fmt.Sprintf("Watched process '%s' is running again", name),
-					Metadata: map[string]interface{}{"process": name},
-				})
-			}
-		}
-	}
-	prevWatchedRunning = nextWatched
 
 	failed := getFailedSystemdUnits()
 	nextFailed := map[string]bool{}
