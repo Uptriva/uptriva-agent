@@ -359,6 +359,19 @@ func applyFeatureFlags(cfg *Config, params map[string]string) string {
 		cfg.WatchFiles = files
 		applied = append(applied, "watch_files="+strconv.Itoa(len(files)))
 	}
+	if v, ok := params["watch_services"]; ok {
+		var services []string
+		seen := map[string]bool{}
+		for _, s := range strings.Split(v, ",") {
+			s = strings.TrimSpace(s)
+			if s != "" && len(s) < 64 && !seen[strings.ToLower(s)] {
+				seen[strings.ToLower(s)] = true
+				services = append(services, s)
+			}
+		}
+		cfg.WatchServices = services
+		applied = append(applied, "watch_services="+strconv.Itoa(len(services)))
+	}
 	if len(applied) == 0 {
 		return "ERROR: no known flags in params"
 	}
