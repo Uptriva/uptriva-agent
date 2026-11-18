@@ -38,12 +38,12 @@ jobs:
           AGENT_RELEASE_PUBKEY: ${{ secrets.AGENT_RELEASE_PUBKEY }}
         run: |
           mkdir -p dist/linux/amd64 dist/linux/arm64 dist/windows/amd64 dist/darwin/amd64 dist/darwin/arm64
-          LDFLAGS="-s -w -trimpath -X main.releasePublicKeyHex=${AGENT_RELEASE_PUBKEY} -X main.AgentVersion=${VERSION}-beta.${{ github.run_number }}"
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/linux/amd64/uptriva-agent ./cmd/
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/linux/arm64/uptriva-agent ./cmd/
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/windows/amd64/uptriva-agent.exe ./cmd/
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/darwin/amd64/uptriva-agent ./cmd/
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/darwin/arm64/uptriva-agent ./cmd/
+          LDFLAGS="-s -w -X main.releasePublicKeyHex=${AGENT_RELEASE_PUBKEY} -X main.AgentVersion=${VERSION}-beta.${{ github.run_number }}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o dist/linux/amd64/uptriva-agent ./cmd/
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$LDFLAGS" -o dist/linux/arm64/uptriva-agent ./cmd/
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o dist/windows/amd64/uptriva-agent.exe ./cmd/
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o dist/darwin/amd64/uptriva-agent ./cmd/
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="$LDFLAGS" -o dist/darwin/arm64/uptriva-agent ./cmd/
 
       - name: Generate Checksums and Metadata
         env:
