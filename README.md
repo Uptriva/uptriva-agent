@@ -21,7 +21,15 @@ This agent is open source for transparency. You can review the code to verify:
 
 ## Installation
 
-### Linux/macOS
+### One-liner (Linux/macOS/FreeBSD)
+
+```bash
+curl -sfL https://raw.githubusercontent.com/Uptriva/uptriva-agent/main/install.sh | bash -s -- --token=YOUR_TOKEN
+```
+
+Verifies the release checksum against `manifest.json`, sets up a systemd/launchd/rc.d service, and supports `--enroll-token` and `--channel=beta`.
+
+### Manual binary install
 
 ```bash
 wget https://github.com/Uptriva/uptriva-agent/releases/latest/download/uptriva-agent-linux-amd64
