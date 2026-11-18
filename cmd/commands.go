@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -29,16 +30,17 @@ type AgentCommandPoll struct {
 
 var cmdDedup = struct {
 	sync.Mutex
-	loaded bool
-	seen   map[string]bool
-	order  []string
-}{seen: make(map[string]bool)}
+	loaded   bool
+	seen     map[string]bool
+	inflight map[string]bool
+	order    []string
+}{seen: make(map[string]bool), inflight: make(map[string]bool)}
 
 func commandStatePath() string {
 	return configPath() + ".state"
 }
 
-func markCommandExecuted(id string) bool {
+func claimCommand(id string) bool {
 	if id == "" {
 		return true
 	}
@@ -58,9 +60,20 @@ func markCommandExecuted(id string) bool {
 			}
 		}
 	}
-	if cmdDedup.seen[id] {
+	if cmdDedup.seen[id] || cmdDedup.inflight[id] {
 		return false
 	}
+	cmdDedup.inflight[id] = true
+	return true
+}
+
+func markCommandExecuted(id string) {
+	if id == "" {
+		return
+	}
+	cmdDedup.Lock()
+	defer cmdDedup.Unlock()
+	delete(cmdDedup.inflight, id)
 	cmdDedup.seen[id] = true
 	cmdDedup.order = append(cmdDedup.order, id)
 	if len(cmdDedup.order) > 512 {
@@ -72,7 +85,6 @@ func markCommandExecuted(id string) bool {
 	if b, err := json.Marshal(cmdDedup.order); err == nil {
 		_ = os.WriteFile(commandStatePath(), b, 0600)
 	}
-	return true
 }
 
 func agentHTTPClient() *http.Client {
@@ -101,20 +113,26 @@ func pollAgentCommands(apiURL, token string, cfg *Config) {
 	var out struct {
 		Commands []AgentCommandPoll `json:"commands"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
 		return
 	}
+	sem := make(chan struct{}, 4)
 	for _, cmd := range out.Commands {
 		cmd := cmd
-		go executeAgentCommand(apiURL, token, cmd, cfg)
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem }()
+			executeAgentCommand(apiURL, token, cmd, cfg)
+		}()
 	}
 }
 
 func executeAgentCommand(apiURL, token string, cmd AgentCommandPoll, cfg *Config) {
-	if !markCommandExecuted(cmd.ID) {
+	if !claimCommand(cmd.ID) {
 		ackAgentCommand(apiURL, token, cmd.ID, "completed", "duplicate command delivery ignored")
 		return
 	}
+	defer markCommandExecuted(cmd.ID)
 
 	var params map[string]string
 	if cmd.Params != "" {
@@ -136,6 +154,11 @@ func executeAgentCommand(apiURL, token string, cmd AgentCommandPoll, cfg *Config
 
 	switch cmd.Command {
 	case "restart_service":
+		if !systemCommandsAllowed(cfg) {
+			status = "failed"
+			result = "restart_service is disabled on this agent — set allow_system_commands or AGENT_ALLOW_SYSTEM_CMDS=true"
+			break
+		}
 		result = restartService(params["service"])
 	case "exec_script":
 		if !execScriptAllowed(cfg) {
@@ -290,7 +313,7 @@ func updatePackages() string {
 
 	var log strings.Builder
 	for _, s := range steps {
-		env := os.Environ()
+		env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "LANG=C.UTF-8"}
 		if s.name == "apt-get" {
 			env = append(env, "DEBIAN_FRONTEND=noninteractive")
 		}

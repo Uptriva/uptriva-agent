@@ -120,6 +120,7 @@ func main() {
 	tag := flag.String("tag", "", "git tag of the release, e.g. v1.7.0 (required)")
 	repo := flag.String("repo", "Uptriva/uptriva-agent", "GitHub repo in owner/name form")
 	out := flag.String("out", "", "output path for manifest.json (required)")
+	allowUnsigned := flag.Bool("allow-unsigned", false, "emit an unsigned manifest (development only)")
 	flag.Parse()
 
 	if *dir == "" || *tag == "" || *out == "" {
@@ -182,6 +183,9 @@ func main() {
 
 	keyHex := strings.TrimSpace(os.Getenv("AGENT_RELEASE_SIGNING_KEY"))
 	if keyHex == "" {
+		if !*allowUnsigned {
+			log.Fatal("AGENT_RELEASE_SIGNING_KEY not set — refusing to emit unsigned manifest (pass -allow-unsigned for development)")
+		}
 		log.Println("WARN: AGENT_RELEASE_SIGNING_KEY not set, emitting unsigned manifest")
 	} else {
 		key := loadSigningKey()

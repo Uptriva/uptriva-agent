@@ -1,23 +1,36 @@
 #!/bin/bash
+set -euo pipefail
+
+RELEASE_PUBKEY_PEM='-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEA5RGhhAJQ+XQxodvhbyL67zYk0+xCYXQXyGVuxJZ0jDE=
+-----END PUBLIC KEY-----'
+
 TOKEN=""
 ENROLL_TOKEN=""
 CHANNEL="stable"
+ALLOW_UNSIGNED=0
 for i in "$@"; do
   case $i in
     --token=*)
       TOKEN="${i#*=}"
-      shift
       ;;
     --enroll-token=*)
       ENROLL_TOKEN="${i#*=}"
-      shift
       ;;
     --channel=*)
       CHANNEL="${i#*=}"
-      shift
+      ;;
+    --allow-unsigned)
+      ALLOW_UNSIGNED=1
       ;;
   esac
 done
+TOKEN="${TOKEN:-${AGENT_TOKEN:-}}"
+ENROLL_TOKEN="${ENROLL_TOKEN:-${AGENT_ENROLL_TOKEN:-}}"
+
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
 
 API_BASE=""
 for BASE in "https://api.uptriva.com" "https://api.shxrk.systems"; do
@@ -33,11 +46,10 @@ fi
 
 GH_BASE="https://github.com/Uptriva/uptriva-agent/releases/latest/download"
 if [ "$CHANNEL" = "beta" ]; then
-  BETA_TAG=$(curl -fsSL -m 15 "https://api.github.com/repos/Uptriva/uptriva-agent/releases?per_page=15" 2>/dev/null \
-    | grep -oE '"tag_name":"[^"]+"|"prerelease":(true|false)' \
-    | paste - - \
-    | sed -n 's/"tag_name":"\([^"]*\)".*"prerelease":true.*/\1/p' \
-    | head -n1)
+  RELEASES_JSON=$(curl -fsSL -m 15 "https://api.github.com/repos/Uptriva/uptriva-agent/releases?per_page=15" 2>/dev/null || true)
+  BETA_TAG=$(printf '%s' "$RELEASES_JSON" | tr -d ' \n\t' | sed 's/},{/}\n{/g' \
+    | grep '"prerelease":true' | head -n1 \
+    | sed -n 's/.*"tag_name":"\([^"]*\)".*/\1/p' || true)
   if [ -z "$BETA_TAG" ]; then
     echo "Error: no beta release found for uptriva-agent"
     exit 1
@@ -48,24 +60,6 @@ fi
 if ! curl -fsSI -m 10 -o /dev/null "$GH_BASE/manifest.json" 2>/dev/null; then
   echo "Error: could not reach the agent release repository"
   exit 1
-fi
-
-if [ -n "$ENROLL_TOKEN" ]; then
-  HOSTNAME="$(hostname -f 2>/dev/null || hostname)"
-  AGENT_TOKEN=""
-  for CFG in "/etc/uptriva/agent_config.json" "/etc/shxrk/agent_config.json" "$HOME/.uptriva/agent_config.json" "$HOME/.shxrk/agent_config.json"; do
-    if [ -f "$CFG" ]; then
-      AGENT_TOKEN=$(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "$CFG" | head -n1)
-      [ -n "$AGENT_TOKEN" ] && break
-    fi
-  done
-  echo "Enrolling agent with enrollment token..."
-  RESP=$(curl -sS -X POST "$API_BASE/api/v1/uptime/agents/enroll" -H "Content-Type: application/json" -d "{\"token\":\"$ENROLL_TOKEN\",\"hostname\":\"$HOSTNAME\",\"agent_token\":\"$AGENT_TOKEN\"}")
-  TOKEN=$(echo "$RESP" | sed -n 's/.*"agent_token":"\([^"]*\)".*/\1/p')
-  if [ -z "$TOKEN" ]; then
-    echo "Enrollment failed: $RESP"
-    exit 1
-  fi
 fi
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -96,22 +90,31 @@ elif [ "$OS" = "linux" ]; then
     fi
   fi
   $SUDO mkdir -p "$CONFIG_DIR"
-elif [ "$OS" = "freebsd" ]; then
-  BIN_DIR="/usr/local/bin"
-  CONFIG_DIR="/usr/local/etc/uptriva"
-  LEGACY_CONFIG_DIR="/usr/local/etc/shxrk"
-  if [ "$(id -u)" -ne 0 ]; then
-    if command -v sudo >/dev/null 2>&1; then
-      SUDO="sudo"
-    else
-      echo "Error: root privileges are required on FreeBSD. Re-run as root or install sudo."
-      exit 1
-    fi
-  fi
-  $SUDO mkdir -p "$CONFIG_DIR"
 else
   echo "Unsupported OS: $OS"
   exit 1
+fi
+
+if [ -n "$ENROLL_TOKEN" ]; then
+  HOSTNAME="$(hostname -f 2>/dev/null || hostname)"
+  AGENT_TOKEN_CFG=""
+  for CFG in "/etc/uptriva/agent_config.json" "/etc/shxrk/agent_config.json" "$HOME/.uptriva/agent_config.json" "$HOME/.shxrk/agent_config.json"; do
+    if [ -f "$CFG" ]; then
+      AGENT_TOKEN_CFG=$(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "$CFG" | head -n1)
+      [ -n "$AGENT_TOKEN_CFG" ] && break
+    fi
+  done
+  echo "Enrolling agent with enrollment token..."
+  PAYLOAD_FILE=$(mktemp) && chmod 600 "$PAYLOAD_FILE"
+  printf '{"token":"%s","hostname":"%s","agent_token":"%s"}' \
+    "$(json_escape "$ENROLL_TOKEN")" "$(json_escape "$HOSTNAME")" "$(json_escape "$AGENT_TOKEN_CFG")" > "$PAYLOAD_FILE"
+  RESP=$(curl -sS -X POST "$API_BASE/api/v1/uptime/agents/enroll" -H "Content-Type: application/json" -d @"$PAYLOAD_FILE" || true)
+  rm -f "$PAYLOAD_FILE"
+  TOKEN=$(printf '%s' "$RESP" | sed -n 's/.*"agent_token":"\([^"]*\)".*/\1/p')
+  if [ -z "$TOKEN" ]; then
+    echo "Enrollment failed: $RESP"
+    exit 1
+  fi
 fi
 
 if [ "$OS" = "linux" ]; then
@@ -149,39 +152,140 @@ if [ -z "$TOKEN" ]; then
   fi
 fi
 
+TMP_BIN=$(mktemp /tmp/uptriva-agent.XXXXXX) || { echo "Failed to create temp file"; exit 1; }
+trap 'rm -f "$TMP_BIN"' EXIT
+
 echo "Downloading monitoring agent for ${OS}/${ARCH}..."
-if ! $SUDO curl -fsSL -o "$BIN_DIR/uptriva-agent" "$GH_BASE/uptriva-agent-${OS}-${ARCH}" 2>/dev/null; then
+if ! curl -fsSL -o "$TMP_BIN" "$GH_BASE/uptriva-agent-${OS}-${ARCH}" 2>/dev/null; then
   echo "Failed to download agent binary for ${OS}/${ARCH}"
   exit 1
 fi
 
-echo "Verifying checksum against release manifest..."
-MANIFEST=$(curl -fsSL "$GH_BASE/manifest.json" 2>/dev/null) || { echo "Failed to fetch release manifest"; exit 1; }
-EXPECTED=$(echo "$MANIFEST" | tr -d ' \t\n' | sed -n "s/.*\"${OS}\/${ARCH}\":{[^}]*\"checksum\":\"\([a-fA-F0-9]*\)\".*/\1/p")
+echo "Fetching and verifying release manifest..."
+MANIFEST_FILE=$(mktemp) && chmod 600 "$MANIFEST_FILE"
+if ! curl -fsSL -o "$MANIFEST_FILE" "$GH_BASE/manifest.json" 2>/dev/null; then
+  echo "Failed to fetch release manifest"
+  rm -f "$MANIFEST_FILE"
+  exit 1
+fi
+MANIFEST=$(cat "$MANIFEST_FILE")
+
+SIG_HEX=$(printf '%s' "$MANIFEST" | tr -d ' \t\n' | sed -n 's/.*"signature":"\([0-9a-fA-F]*\)".*/\1/p')
+if [ -z "$SIG_HEX" ]; then
+  if [ "$ALLOW_UNSIGNED" = "1" ]; then
+    echo "WARNING: manifest is unsigned; continuing because --allow-unsigned was given"
+  else
+    echo "Error: release manifest is unsigned. Refusing to install (pass --allow-unsigned to override)."
+    rm -f "$MANIFEST_FILE"
+    exit 1
+  fi
+else
+  PAYLOAD=$(printf '%s' "$MANIFEST" | tr -d ' \t\n' \
+    | sed 's/,"key_id":"[0-9a-fA-F]*"//; s/,"signature":"[0-9a-fA-F]*"//')
+  PUBKEY_FILE=$(mktemp) && chmod 600 "$PUBKEY_FILE"
+  SIG_FILE=$(mktemp) && chmod 600 "$SIG_FILE"
+  PAYLOAD_FILE=$(mktemp) && chmod 600 "$PAYLOAD_FILE"
+  printf '%s' "$RELEASE_PUBKEY_PEM" > "$PUBKEY_FILE"
+  if command -v xxd >/dev/null 2>&1; then
+    printf '%s' "$SIG_HEX" | xxd -r -p > "$SIG_FILE"
+  elif command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$SIG_HEX" | python3 -c 'import sys,binascii;sys.stdout.buffer.write(binascii.unhexlify(sys.stdin.read()))' > "$SIG_FILE"
+  elif command -v perl >/dev/null 2>&1; then
+    printf '%s' "$SIG_HEX" | perl -ne 'print pack("H*", $_)' > "$SIG_FILE"
+  else
+    echo "Error: need xxd, python3, or perl to decode the manifest signature"
+    rm -f "$PUBKEY_FILE" "$SIG_FILE" "$PAYLOAD_FILE" "$MANIFEST_FILE"
+    exit 1
+  fi
+  printf '%s' "$PAYLOAD" > "$PAYLOAD_FILE"
+  VERIFIED=0
+  if openssl pkeyutl -verify -rawin -pubin -inkey "$PUBKEY_FILE" -sigfile "$SIG_FILE" -in "$PAYLOAD_FILE" >/dev/null 2>&1; then
+    VERIFIED=1
+  elif command -v python3 >/dev/null 2>&1 && python3 - "$PUBKEY_FILE" "$SIG_FILE" "$PAYLOAD_FILE" <<'PYEOF' 2>/dev/null
+import sys, hashlib
+def read_pem(p):
+    import base64, re
+    return base64.b64decode(re.sub(r'-----\w+ PUBLIC KEY-----', '', open(p).read()).strip())[-32:]
+q = 2**255 - 19
+def inv(x): return pow(x, q - 2, q)
+d = -121665 * inv(121666) % q
+I = pow(2, (q - 1) // 4, q)
+def xrecover(y):
+    xx = (y * y - 1) * inv(d * y * y + 1)
+    x = pow(xx, (q + 3) // 8, q)
+    if (x * x - xx) % q != 0: x = x * I % q
+    if x % 2 != 0: x = q - x
+    return x
+By = 4 * inv(5) % q
+Bx = xrecover(By)
+B = (Bx, By)
+def edwards_add(P, Q):
+    x1, y1 = P; x2, y2 = Q
+    x3 = (x1 * y2 + x2 * y1) * inv(1 + d * x1 * x2 * y1 * y2) % q
+    y3 = (y1 * y2 + x1 * x2) * inv(1 - d * x1 * x2 * y1 * y2) % q
+    return (x3, y3)
+def scalarmult(P, e):
+    Q = (0, 1)
+    while e > 0:
+        if e & 1: Q = edwards_add(Q, P)
+        P = edwards_add(P, P)
+        e >>= 1
+    return Q
+def decodepoint(s):
+    y = int.from_bytes(s, 'little') & ((1 << 255) - 1)
+    x = xrecover(y)
+    if bool(x & 1) != bool(s[31] & 0x80): x = q - x
+    if (y * y - x * x - 1 - d * x * x * y * y) % q != 0:
+        raise ValueError('bad point')
+    return (x, y)
+pk = read_pem(sys.argv[1])
+sig = open(sys.argv[2], 'rb').read()
+msg = open(sys.argv[3], 'rb').read()
+if len(sig) != 64: sys.exit(1)
+R = decodepoint(sig[:32]); S = int.from_bytes(sig[32:], 'little'); A = decodepoint(pk)
+h = int.from_bytes(hashlib.sha512(sig[:32] + pk + msg).digest(), 'little')
+sys.exit(0 if scalarmult(B, S) == edwards_add(R, scalarmult(A, h)) else 1)
+PYEOF
+  then
+    VERIFIED=1
+  fi
+  rm -f "$PUBKEY_FILE" "$SIG_FILE" "$PAYLOAD_FILE" "$MANIFEST_FILE"
+  if [ "$VERIFIED" != "1" ]; then
+    echo "Error: release manifest signature verification failed. Refusing to install."
+    exit 1
+  fi
+  echo "Manifest signature verified"
+fi
+
+EXPECTED=$(printf '%s' "$MANIFEST" | tr -d ' \t\n' | sed -n "s/.*\"${OS}\/${ARCH}\":{[^}]*\"checksum\":\"\([a-fA-F0-9]*\)\".*/\1/p")
 if [ -z "$EXPECTED" ]; then
   echo "No checksum for ${OS}/${ARCH} found in release manifest"
   exit 1
 fi
 if command -v sha256sum >/dev/null 2>&1; then
-  ACTUAL=$(sha256sum "$BIN_DIR/uptriva-agent" | cut -d' ' -f1)
+  ACTUAL=$(sha256sum "$TMP_BIN" | cut -d' ' -f1)
 elif command -v sha256 >/dev/null 2>&1; then
-  ACTUAL=$(sha256 -q "$BIN_DIR/uptriva-agent")
+  ACTUAL=$(sha256 -q "$TMP_BIN")
 else
-  ACTUAL=$(shasum -a 256 "$BIN_DIR/uptriva-agent" | cut -d' ' -f1)
+  ACTUAL=$(shasum -a 256 "$TMP_BIN" | cut -d' ' -f1)
 fi
 if [ "$EXPECTED" != "$ACTUAL" ]; then
   echo "Checksum mismatch - refusing to install downloaded binary"
-  $SUDO rm -f "$BIN_DIR/uptriva-agent"
   exit 1
 fi
+echo "Checksum verified"
 
-$SUDO chmod +x "$BIN_DIR/uptriva-agent"
+$SUDO tee "$BIN_DIR/.uptriva-agent.new" < "$TMP_BIN" > /dev/null
+$SUDO chmod 0755 "$BIN_DIR/.uptriva-agent.new"
+$SUDO mv -f "$BIN_DIR/.uptriva-agent.new" "$BIN_DIR/uptriva-agent"
+rm -f "$TMP_BIN"
+trap - EXIT
 
 if [ -n "$TOKEN" ]; then
   echo "Registering agent with token..."
   cd "$CONFIG_DIR" || exit 1
   $SUDO rm -f "$CONFIG_DIR/agent_config.json"
-  $SUDO "$BIN_DIR/uptriva-agent" --token="$TOKEN" &
+  $SUDO env AGENT_TOKEN="$TOKEN" "$BIN_DIR/uptriva-agent" &
   AGENT_PID=$!
   for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     if [ -f "$CONFIG_DIR/agent_config.json" ]; then
@@ -198,6 +302,17 @@ if [ -n "$TOKEN" ]; then
 elif [ ! -f "$CONFIG_DIR/agent_config.json" ]; then
   echo "No existing configuration found. Re-run with --token."
   exit 1
+fi
+
+if [ "$CHANNEL" = "beta" ] && [ -f "$CONFIG_DIR/agent_config.json" ]; then
+  if grep -q '"beta_channel"' "$CONFIG_DIR/agent_config.json"; then
+    $SUDO sed -i.bak 's/"beta_channel":[^,}]*/"beta_channel":true/' "$CONFIG_DIR/agent_config.json" 2>/dev/null || \
+      $SUDO sed -i '' 's/"beta_channel":[^,}]*/"beta_channel":true/' "$CONFIG_DIR/agent_config.json"
+  else
+    $SUDO sed -i.bak 's/^{/"beta_channel":true,/' "$CONFIG_DIR/agent_config.json" 2>/dev/null || \
+      $SUDO sed -i '' 's/^{/"beta_channel":true,/' "$CONFIG_DIR/agent_config.json"
+  fi
+  $SUDO rm -f "$CONFIG_DIR/agent_config.json.bak"
 fi
 
 if [ "$OS" = "darwin" ]; then
@@ -235,35 +350,6 @@ EOF
     echo "WARNING: agent service failed to start. Check: tail -50 $CONFIG_DIR/agent.log"
     exit 1
   fi
-elif [ "$OS" = "freebsd" ]; then
-  echo "Creating rc.d service..."
-  $SUDO tee /usr/local/etc/rc.d/uptriva-agent > /dev/null <<'EOF'
-#!/bin/sh
-# PROVIDE: uptriva_agent
-# REQUIRE: LOGIN NETWORKING
-# KEYWORD: shutdown
-
-name="uptriva_agent"
-rcvar="${name}_enable"
-command="/usr/local/bin/uptriva-agent"
-uptriva_agent_chdir="/usr/local/etc/uptriva"
-pidfile="/var/run/${name}.pid"
-procname="${command}"
-command_args=""
-
-. /etc/rc.subr
-run_rc_command "$1"
-EOF
-  $SUDO chmod +x /usr/local/etc/rc.d/uptriva-agent
-  $SUDO sysrc uptriva_agent_enable=YES
-  $SUDO service uptriva-agent start
-
-  if $SUDO service uptriva-agent status >/dev/null 2>&1; then
-    echo "Uptriva agent successfully installed and started!"
-  else
-    echo "WARNING: agent service failed to start. Check: service uptriva-agent status"
-    exit 1
-  fi
 elif [ "$OS" = "linux" ]; then
   echo "Creating systemd service..."
   $SUDO tee /etc/systemd/system/uptriva-agent.service > /dev/null <<EOF
@@ -278,6 +364,15 @@ Restart=always
 RestartSec=5
 User=root
 WorkingDirectory=${CONFIG_DIR}
+UMask=0077
+PrivateTmp=true
+ProtectHome=read-only
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelLogs=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
 
 [Install]
 WantedBy=multi-user.target

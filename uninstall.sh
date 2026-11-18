@@ -10,7 +10,8 @@ if [ "$(id -u)" -ne 0 ]; then
   if command -v sudo >/dev/null 2>&1; then
     SUDO="sudo"
   else
-    SUDO=""
+    echo "Error: root privileges are required to remove the agent. Re-run as root or install sudo."
+    exit 1
   fi
 else
   SUDO=""
@@ -30,7 +31,7 @@ if [ "$OS" = "linux" ]; then
   done
   $SUDO systemctl daemon-reload 2>/dev/null || true
 
-  for BIN in uptriva-agent shxrk-agent uptime-agent; do
+  for BIN in uptriva-agent uptriva-agent.bak uptriva-agent.new uptriva-agent.update-pending uptriva-agent.bak.sha256 shxrk-agent uptime-agent; do
     for DIR in /usr/local/bin /usr/bin /bin; do
       if [ -f "${DIR}/${BIN}" ]; then
         echo "Removing binary ${DIR}/${BIN}"
@@ -39,6 +40,9 @@ if [ "$OS" = "linux" ]; then
       fi
     done
   done
+  if pgrep -f "uptriva-agent" >/dev/null 2>&1; then
+    echo "WARNING: an uptriva-agent process is still running (started outside systemd)"
+  fi
 
   for DIR in /etc/uptriva /etc/shxrk; do
     if [ -d "$DIR" ]; then

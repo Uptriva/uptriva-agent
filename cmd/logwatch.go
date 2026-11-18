@@ -172,22 +172,34 @@ func fetchLogWatchRules(apiURL, token string) ([]logWatchRule, error) {
 	var body struct {
 		Rules []logWatchRule `json:"rules"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
 		return nil, err
 	}
-	if len(body.Rules) == 0 {
-		return nil, fmt.Errorf("no rules")
+	return clampLogWatchRules(body.Rules), nil
+}
+
+func clampLogWatchRules(rules []logWatchRule) []logWatchRule {
+	if len(rules) > 200 {
+		rules = rules[:200]
 	}
-	return body.Rules, nil
+	for i := range rules {
+		if rules[i].ThrottleSec < 30 {
+			rules[i].ThrottleSec = 30
+		}
+		if rules[i].MaxLen <= 0 || rules[i].MaxLen > 2048 {
+			rules[i].MaxLen = 2048
+		}
+	}
+	return rules
 }
 
 func startLogWatcher(cfg Config) {
 	state := getLogWatchState()
 	rules := defaultLogWatchRules()
-	if remoteRules, err := fetchLogWatchRules(cfg.APIURL, cfg.Token); err == nil {
-		rules = remoteRules
-		fmt.Printf("[logwatch] loaded %d rules from server\n", len(rules))
-	} else {
+	if remoteRules, err := fetchLogWatchRules(cfg.APIURL, cfg.Token); err == nil && len(remoteRules) > 0 {
+		rules = append(rules, remoteRules...)
+		fmt.Printf("[logwatch] loaded %d rules from server (merged with %d defaults)\n", len(remoteRules), len(defaultLogWatchRules()))
+	} else if err != nil {
 		fmt.Printf("[logwatch] using %d default rules (%v)\n", len(rules), err)
 	}
 	state.setRules(rules)

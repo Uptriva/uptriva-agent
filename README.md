@@ -27,7 +27,7 @@ This agent is open source for transparency. You can review the code to verify:
 curl -sfL https://raw.githubusercontent.com/Uptriva/uptriva-agent/main/install.sh | bash -s -- --token=YOUR_TOKEN
 ```
 
-Verifies the release checksum against `manifest.json`, sets up a systemd/launchd/rc.d service, and supports `--enroll-token` and `--channel=beta`.
+Verifies the ed25519 signature on `manifest.json` against the embedded release public key, then checks the binary checksum before installing. Sets up a systemd/launchd service and supports `--enroll-token`, `--channel=beta`, and `--allow-unsigned` (unsigned manifests only; signature failures always abort).
 
 ### Manual binary install
 
@@ -141,7 +141,8 @@ These features emit agent events to the platform. Most require Linux and read ac
 
 ### Remote commands (default off)
 
-- `enable_remote_commands` — enables the remote command channel (`restart_service`, `exec_script`, `collect_diagnostics`). `disable_remote_commands` force-disables it even if enabled elsewhere. `exec_script` additionally requires `allow_exec_script`.
+- `enable_remote_commands` — enables the remote command channel (`collect_diagnostics` and, when `allow_system_commands` is also set, `restart_service`, `reboot_host`, `update_packages`). `disable_remote_commands` force-disables it even if enabled elsewhere. `exec_script` additionally requires `allow_exec_script`.
+- `allow_system_commands` — permits host-level commands (`restart_service`, `reboot_host`, `update_packages`); off by default even when remote commands are enabled
 - `allow_exec_script` — permits the `exec_script` remote command; off by default even when remote commands are enabled
 
 Toggles can also be set via CLI flags (persisted to the config) or environment variables:
@@ -191,9 +192,11 @@ If a release changes the privacy policy version, the update pauses until an oper
 
 Things you should know before running this on your servers:
 
-- **Self-update is on by default.** The agent periodically replaces its binary from GitHub Releases. Official releases are verified against an ed25519-signed manifest; self-built binaries skip signature verification unless you set `AGENT_RELEASE_PUBKEY`. Disable with `AGENT_DISABLE_UPDATE=true`.
+- **Self-update is on by default.** The agent periodically replaces its binary from GitHub Releases. Official releases are verified against an ed25519-signed manifest; self-built binaries skip signature verification unless you set `AGENT_RELEASE_PUBKEY`. `AGENT_ALLOW_UNSIGNED_RELEASES=true` disables signature verification entirely (dangerous — debugging only). Disable updates with `AGENT_DISABLE_UPDATE=true`.
+- **install.sh verifies the same signature.** The installer embeds the release public key and refuses unsigned or incorrectly signed manifests. Pass `--allow-unsigned` only for development builds.
+- **SSH/SFTP monitors trust any host key by default.** Set `host_key` in the monitor settings to an OpenSSH public key (`ssh-ed25519 AAAA...`) to pin it. Without pinning, credentials may be exposed to a MITM on hostile networks.
 - **Remote commands are off by default.** Enabling them lets the platform restart services, reboot the host, update packages, or run scripts (`exec_script` needs an extra flag). Review `cmd/commands.go` before opting in.
-- **What leaves the host:** system metrics, process names, listening ports, systemd units, and host identity. Opt-in features can additionally send journal lines, SSH/sudo events, k8s pod log tails, and file-change events. Monitor check results may include credentials the platform assigns to this agent.
+- **What leaves the host:** system metrics, process names, listening ports, systemd units, and host identity. Opt-in features can additionally send journal lines, SSH/sudo events, k8s pod log tails (requires `collect_logs` in the monitor settings), and file-change events. Monitor check results may include credentials the platform assigns to this agent.
 - **Your token is stored in cleartext** in `agent_config.json` (mode 0600). Protect the file accordingly.
 
 ## Building from source

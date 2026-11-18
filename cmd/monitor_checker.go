@@ -204,7 +204,7 @@ func fetchAssignedMonitors(apiURL, token string) ([]AssignedMonitor, error) {
 	var data struct {
 		Monitors []AssignedMonitor `json:"monitors"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&data); err != nil {
 		return nil, err
 	}
 	return data.Monitors, nil
@@ -566,6 +566,7 @@ type infraSettings struct {
 	Kind               string `json:"kind"`
 	MinReady           int    `json:"min_ready"`
 	Kubeconfig         string `json:"kubeconfig"`
+	CollectLogs        bool   `json:"collect_logs"`
 }
 
 func checkContainerRuntime(binary, target string, settings json.RawMessage) (string, int, string) {
@@ -673,14 +674,15 @@ func checkKubeDeployment(target string, settings json.RawMessage) (string, int, 
 	if !validExecTarget(name) || !validExecTarget(ns) {
 		return "down", 0, "invalid workload or namespace name", nil
 	}
-	kubeconfig := strings.TrimSpace(s.Kubeconfig)
-	if kubeconfig == "" {
-		for _, p := range []string{"/etc/rancher/k3s/k3s.yaml", os.Getenv("HOME") + "/.kube/config", "/root/.kube/config"} {
-			if _, err := os.Stat(p); err == nil {
-				kubeconfig = p
-				break
-			}
+	var kubeconfig string
+	for _, p := range []string{"/etc/rancher/k3s/k3s.yaml", os.Getenv("HOME") + "/.kube/config", "/root/.kube/config"} {
+		if _, err := os.Stat(p); err == nil {
+			kubeconfig = p
+			break
 		}
+	}
+	if requested := strings.TrimSpace(s.Kubeconfig); requested != "" && requested == kubeconfig {
+		kubeconfig = requested
 	}
 	if kubeconfig == "" {
 		return "down", 0, "no kubeconfig found on agent host", nil
@@ -726,7 +728,7 @@ func checkKubeDeployment(target string, settings json.RawMessage) (string, int, 
 		"ready":     ready,
 	}
 	if sel := kubeSelectorString(wl.Spec.Selector); sel != "" {
-		pods := kubeListPods(kubeconfig, ns, sel)
+		pods := kubeListPods(kubeconfig, ns, sel, s.CollectLogs)
 		if len(pods) > 0 {
 			metrics["pods"] = pods
 		}
@@ -764,7 +766,7 @@ func kubeSelectorString(selector map[string]interface{}) string {
 	return strings.Join(parts, ",")
 }
 
-func kubeListPods(kubeconfig, ns, selector string) []map[string]interface{} {
+func kubeListPods(kubeconfig, ns, selector string, collectLogs bool) []map[string]interface{} {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "kubectl", "--kubeconfig", kubeconfig, "-n", ns, "get", "pods", "-l", selector, "-o", "json").CombinedOutput()
@@ -822,7 +824,7 @@ func kubeListPods(kubeconfig, ns, selector string) []map[string]interface{} {
 			}
 		}
 		unhealthy := p.Status.Phase != "Running" || readyCount < total || restarts > 0
-		if unhealthy {
+		if unhealthy && collectLogs {
 			if logs := kubePodLogs(kubeconfig, ns, p.Metadata.Name, 8); len(logs) > 0 {
 				pod["logs"] = logs
 			}
@@ -1021,7 +1023,7 @@ func checkMQTT(target string, settings json.RawMessage) (string, int, string) {
 		addr = net.JoinHostPort(host, fmt.Sprintf("%d", s.Port))
 	}
 
-	clientID := "shxrk-probe"
+	clientID := "uptriva-probe"
 	username := strings.TrimSpace(s.Username)
 	if len(username) > 255 || len(s.Password) > 255 {
 		return "down", 0, "MQTT credentials exceed 255-byte limit"
@@ -1086,7 +1088,7 @@ func checkKafka(target string, settings json.RawMessage) (string, int, string) {
 		addr = net.JoinHostPort(host, fmt.Sprintf("%d", s.Port))
 	}
 
-	clientID := "shxrk-probe"
+	clientID := "uptriva-probe"
 	body := []byte{0x00, 0x12, 0x00, 0x00}
 	body = append(body, 0x00, 0x00, 0x00, 0x01)
 	body = append(body, 0x00, byte(len(clientID)))

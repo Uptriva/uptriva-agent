@@ -358,7 +358,7 @@ func performHandshake(token string) (Config, error) {
 			lastErr = fmt.Errorf("handshake failed with status %d: %s", resp.StatusCode, string(body))
 			continue
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&res); err != nil {
 			resp.Body.Close()
 			lastErr = err
 			continue
@@ -514,7 +514,7 @@ func fetchManifestFromGitHub(betaChannel bool) (*AgentManifest, error) {
 			return nil, fmt.Errorf("github releases returned %d", resp.StatusCode)
 		}
 		var releases []githubRelease
-		if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&releases); err != nil {
 			return nil, err
 		}
 		found := false
@@ -537,7 +537,7 @@ func fetchManifestFromGitHub(betaChannel bool) (*AgentManifest, error) {
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("github releases returned %d", resp.StatusCode)
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&release); err != nil {
 			return nil, err
 		}
 	}
@@ -563,7 +563,7 @@ func fetchManifestFromGitHub(betaChannel bool) (*AgentManifest, error) {
 		return nil, fmt.Errorf("manifest asset returned %d", resp.StatusCode)
 	}
 	var manifest AgentManifest
-	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&manifest); err != nil {
 		return nil, err
 	}
 	if err := verifyManifestSignature(&manifest); err != nil {
@@ -574,18 +574,18 @@ func fetchManifestFromGitHub(betaChannel bool) (*AgentManifest, error) {
 
 func downloadFile(assetURL string) (*http.Response, error) {
 	client := &http.Client{Timeout: 120 * time.Second}
-	if strings.HasPrefix(assetURL, "http://") || strings.HasPrefix(assetURL, "https://") {
-		resp, err := client.Get(assetURL)
-		if err != nil {
-			return nil, err
-		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			return nil, fmt.Errorf("download returned %d", resp.StatusCode)
-		}
-		return resp, nil
+	if !strings.HasPrefix(assetURL, "https://") {
+		return nil, fmt.Errorf("asset URL must be https://, refusing: %s", assetURL)
 	}
-	return nil, fmt.Errorf("relative asset URLs are not supported: %s", assetURL)
+	resp, err := client.Get(assetURL)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("download returned %d", resp.StatusCode)
+	}
+	return resp, nil
 }
 
 func compareVersions(a, b string) int {
@@ -1235,10 +1235,12 @@ func main() {
 				continue
 			}
 			resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				confirmUpdate()
+			}
 			switch resp.StatusCode {
 			case 204:
 				fmt.Printf("[agent] metrics sent successfully (%s)\n", time.Now().Format("15:04:05"))
-				confirmUpdate()
 			case 401, 403:
 				fmt.Printf("[agent] metrics rejected with %d — re-running handshake\n", resp.StatusCode)
 				if cfg, herr := performHandshake(config.Token); herr == nil {

@@ -5,13 +5,26 @@ on:
     branches: [ "main" ]
     paths: [ "VERSION" ]
   workflow_dispatch:
+    inputs:
+      force_reupload:
+        description: "Allow overwriting an existing release's assets"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -19,7 +32,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
-          go-version: '1.26'
+          go-version-file: go.mod
 
       - name: Read Version
         id: version
@@ -27,12 +40,26 @@ jobs:
           VERSION=$(cat VERSION)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Guard Existing Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          FORCE: ${{ inputs.force_reupload }}
+        run: |
+          TAG="v${VERSION}"
+          if gh release view "$TAG" --repo Uptriva/uptriva-agent >/dev/null 2>&1 && [ "$FORCE" != "true" ]; then
+            echo "Release $TAG already exists. Refusing to overwrite a published release."
+            echo "Re-run via workflow_dispatch with force_reupload=true if this is intentional."
+            exit 1
+          fi
+
       - name: Build Static Agents for Multi-Platforms
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          AGENT_RELEASE_PUBKEY: ${{ secrets.AGENT_RELEASE_PUBKEY }}
         run: |
           mkdir -p dist/linux/amd64 dist/linux/arm64 dist/windows/amd64 dist/darwin/amd64 dist/darwin/arm64
-          LDFLAGS="-s -w -X main.releasePublicKeyHex=${{ secrets.AGENT_RELEASE_PUBKEY }} -X main.AgentVersion=${VERSION}"
+          LDFLAGS="-s -w -trimpath -X main.releasePublicKeyHex=${AGENT_RELEASE_PUBKEY} -X main.AgentVersion=${VERSION}"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/linux/amd64/uptriva-agent ./cmd/
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/linux/arm64/uptriva-agent ./cmd/
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/windows/amd64/uptriva-agent.exe ./cmd/
@@ -68,6 +95,12 @@ jobs:
           cp dist/darwin/amd64/uptriva-agent ghassets/uptriva-agent-darwin-amd64
           cp dist/darwin/arm64/uptriva-agent ghassets/uptriva-agent-darwin-arm64
           go run ./tools/releasemanifest -dir dist -repo Uptriva/uptriva-agent -tag "v${VERSION}" -out ghassets/manifest.json
+          grep -q '"signature": "[0-9a-f]\{128\}"' ghassets/manifest.json || { echo "manifest is unsigned"; exit 1; }
+
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-path: 'ghassets/*'
 
       - name: Publish GitHub Release
         env:

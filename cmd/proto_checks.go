@@ -19,6 +19,7 @@ type protoAuthSettings struct {
 	Password   string `json:"password"`
 	PrivateKey string `json:"private_key"`
 	TLSMode    string `json:"tls_mode"`
+	HostKey    string `json:"host_key"`
 }
 
 func parseProtoAuth(settings json.RawMessage) protoAuthSettings {
@@ -195,10 +196,18 @@ func buildSSHClientConfig(s protoAuthSettings) (*ssh.ClientConfig, error) {
 	if len(auths) == 0 {
 		return nil, fmt.Errorf("credentials required (password or private key)")
 	}
+	hostKeyCB := ssh.InsecureIgnoreHostKey()
+	if key := strings.TrimSpace(s.HostKey); key != "" {
+		pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(key))
+		if err != nil {
+			return nil, fmt.Errorf("invalid host_key setting (expected OpenSSH authorized_keys line)")
+		}
+		hostKeyCB = ssh.FixedHostKey(pub)
+	}
 	return &ssh.ClientConfig{
 		User:            user,
 		Auth:            auths,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCB,
 		Timeout:         10 * time.Second,
 	}, nil
 }
