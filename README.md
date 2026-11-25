@@ -144,6 +144,7 @@ These features emit agent events to the platform. Most require Linux and read ac
 - `enable_remote_commands` — enables the remote command channel (`collect_diagnostics` and, when `allow_system_commands` is also set, `restart_service`, `reboot_host`, `update_packages`). `disable_remote_commands` force-disables it even if enabled elsewhere. `exec_script` additionally requires `allow_exec_script`.
 - `allow_system_commands` — permits host-level commands (`restart_service`, `reboot_host`, `update_packages`); off by default even when remote commands are enabled
 - `allow_exec_script` — permits the `exec_script` remote command; off by default even when remote commands are enabled
+- `read_only` — observe-only mode: the agent reports metrics and accepts configuration changes (`set_feature_flags`, `collect_diagnostics`) but rejects every mutating remote command (`restart_service`, `reboot_host`, `exec_script`, `update_packages`), which are acked as failed. Set `read_only` in the config to make it manageable remotely, or use `AGENT_READ_ONLY=true` to hard-lock it — env-forced read-only cannot be lifted by feature flags
 
 Toggles can also be set via CLI flags (persisted to the config) or environment variables:
 
@@ -153,12 +154,15 @@ uptriva-agent --no-security-events                     # disable
 uptriva-agent --remote-commands                        # enable remote exec
 uptriva-agent --allow-exec-script                      # also allow exec_script
 uptriva-agent --no-remote-commands                     # disable remote exec
+uptriva-agent --read-only                              # observe only: config changes ok, no host commands
+uptriva-agent --no-read-only                           # back to full command mode
 uptriva-agent --beta update                            # switch to beta channel (persisted)
 ```
 
 ```bash
 AGENT_SECURITY_EVENTS=true AGENT_PKG_MONITORING=true uptriva-agent
 AGENT_ENABLE_COMMANDS=true AGENT_ALLOW_EXEC_SCRIPT=true uptriva-agent
+AGENT_READ_ONLY=true uptriva-agent
 ```
 
 To avoid exposing the token in the process list, `AGENT_TOKEN` can be used instead of `--token`. The config file location can be overridden with `UPTRIVA_AGENT_CONFIG`.

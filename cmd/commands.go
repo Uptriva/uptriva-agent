@@ -139,6 +139,11 @@ func executeAgentCommand(apiURL, token string, cmd AgentCommandPoll, cfg *Config
 		_ = json.Unmarshal([]byte(cmd.Params), &params)
 	}
 
+	if readOnlyMode(cfg) && cmd.Command != "set_feature_flags" && cmd.Command != "collect_diagnostics" {
+		ackAgentCommand(apiURL, token, cmd.ID, "failed", cmd.Command+" is disabled — agent runs in read-only mode (read_only / AGENT_READ_ONLY)")
+		return
+	}
+
 	status := "completed"
 	var result string
 
@@ -371,6 +376,10 @@ func applyFeatureFlags(cfg *Config, params map[string]string) string {
 	if v, ok := params["container_watch"]; ok {
 		cfg.ContainerWatchEnabled = truthy(v)
 		applied = append(applied, "container_watch="+strconv.FormatBool(cfg.ContainerWatchEnabled))
+	}
+	if v, ok := params["read_only"]; ok {
+		cfg.ReadOnlyMode = truthy(v)
+		applied = append(applied, "read_only="+strconv.FormatBool(cfg.ReadOnlyMode))
 	}
 	if v, ok := params["watch_files"]; ok {
 		var files []string

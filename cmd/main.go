@@ -70,6 +70,11 @@ type Config struct {
 	EnableRemoteCommands       bool     `json:"enable_remote_commands"`
 	AllowExecScript            bool     `json:"allow_exec_script"`
 	AllowSystemCommands        bool     `json:"allow_system_commands"`
+	ReadOnlyMode               bool     `json:"read_only"`
+}
+
+func readOnlyMode(c *Config) bool {
+	return c.ReadOnlyMode || envFlagEnabled("AGENT_READ_ONLY")
 }
 
 func remoteCommandsEnabled(c *Config) bool {
@@ -181,6 +186,7 @@ type MetricsPayload struct {
 	FailedUnits      string   `json:"failed_units"`
 	SelfPingMs       int      `json:"self_ping_ms"`
 	CheckTypes       []string `json:"check_types,omitempty"`
+	ReadOnly         bool     `json:"read_only,omitempty"`
 	CPUBreakdownJSON string   `json:"cpu_breakdown,omitempty"`
 	DiskIOJSON       string   `json:"disk_io,omitempty"`
 	PortsJSON        string   `json:"listen_ports,omitempty"`
@@ -291,6 +297,9 @@ func collectMetricsWithInterval(apiURL string, interval int) (MetricsPayload, er
 	p.Interval = interval
 	p.Version = AgentVersion
 	p.CheckTypes = agentSupportedCheckTypes
+	if cfg, err := loadConfig(); err == nil {
+		p.ReadOnly = readOnlyMode(&cfg)
+	}
 	return p, nil
 }
 
@@ -888,6 +897,8 @@ func main() {
 	disableCommandsFlag := flag.Bool("no-remote-commands", false, "")
 	enableCommandsFlag := flag.Bool("remote-commands", false, "")
 	allowExecFlag := flag.Bool("allow-exec-script", false, "")
+	readOnlyFlag := flag.Bool("read-only", false, "")
+	noReadOnlyFlag := flag.Bool("no-read-only", false, "")
 	flag.Parse()
 
 	switch flag.Arg(0) {
@@ -1091,11 +1102,17 @@ func main() {
 			if *allowExecFlag {
 				config.AllowExecScript = true
 			}
+			if *readOnlyFlag {
+				config.ReadOnlyMode = true
+			}
+			if *noReadOnlyFlag {
+				config.ReadOnlyMode = false
+			}
 			if err := saveConfig(config); err != nil {
 				fmt.Printf("Error saving config: %v\n", err)
 			}
-			fmt.Printf("[agent] addons: security-events=%v package-monitoring=%v port-watch=%v integrity-monitoring=%v kernel-events=%v cert-watch=%v system-posture=%v container-watch=%v log-watch=%v remote-commands=%v exec-script=%v\n",
-				config.SecurityEventsEnabled, config.PackageMonitoringEnabled, config.PortWatchEnabled, config.IntegrityMonitoringEnabled, config.KernelEventsEnabled, config.CertWatchEnabled, config.SystemPostureEnabled, config.ContainerWatchEnabled, config.LogWatchEnabled, remoteCommandsEnabled(&config), execScriptAllowed(&config))
+			fmt.Printf("[agent] addons: security-events=%v package-monitoring=%v port-watch=%v integrity-monitoring=%v kernel-events=%v cert-watch=%v system-posture=%v container-watch=%v log-watch=%v remote-commands=%v exec-script=%v read-only=%v\n",
+				config.SecurityEventsEnabled, config.PackageMonitoringEnabled, config.PortWatchEnabled, config.IntegrityMonitoringEnabled, config.KernelEventsEnabled, config.CertWatchEnabled, config.SystemPostureEnabled, config.ContainerWatchEnabled, config.LogWatchEnabled, remoteCommandsEnabled(&config), execScriptAllowed(&config), readOnlyMode(&config))
 		}
 	}
 
